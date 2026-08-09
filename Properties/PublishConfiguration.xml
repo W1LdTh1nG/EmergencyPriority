@@ -2,19 +2,35 @@
 	<!--Id must be set in order to update existed mod. it is not required for publishing mod for the first time-->
 	<ModId Value="150540" />
 	<!--Name of the mod to display to players-->
-	<DisplayName Value="EmergencyPriority" />
+	<!--MUST match the live store page. It reads "Emergency Priority" (with a space); this config is the complete
+	    store state, so a value without the space would rename the page.-->
+	<DisplayName Value="Emergency Priority" />
 	<!--Short description of the mod-->
-	<ShortDescription Value="Responding emergency vehicles stop despawning in traffic jams and re-route around congestion." />
+	<ShortDescription Value="Responding emergency vehicles stop despawning in traffic jams, re-route around congestion, and get green lights along their route." />
 	<!--Long description of the mod. Single line or multi line. Supports minimal markdown subset-->
 	<LongDescription>
-Vanilla Cities Skylines II deletes a responding fire engine, ambulance or police car outright once it is flagged as stuck in traffic, and never re-evaluates its route after dispatch. This mod keeps responding units alive and re-routes them around congestion using the game's own pathfinding.
+Vanilla Cities Skylines II deletes a responding fire engine, ambulance or police car outright once it is flagged as stuck in traffic, and never re-evaluates its route after dispatch. This mod keeps responding units alive, re-routes them around congestion, and clears the traffic lights ahead of them — all through the game's own pathfinding and signal priority.
+
+WHAT IT DOES
+
+- Stuck responders stop despawning. A unit the game has flagged as stuck looks for a new route instead of being deleted in the middle of a call.
+
+- Re-routing around congestion. Vanilla plans the route once, at dispatch, and never looks again. A responder that has been sitting in a jam asks for a fresh route that accounts for the traffic actually there now.
+
+- Green lights along the route. Traffic lights ahead of a responding vehicle turn green as it approaches and stay green until it has passed, so the queue in front of it can clear out of the way.
+
+The green lights are not for the ambulance. Emergency vehicles already drive through red lights in this game — what stops them is the queue of ordinary cars in front, and that queue does wait at the red. Giving it somewhere to go is what actually gets the responder moving.
+
+This works through the game's own signal priority, at the same priority the game already grants emergency vehicles. Lights still change through their normal clearance phases, so cross traffic gets its amber and pedestrian crossings behave as usual. No light is ever forced, and every junction returns to its normal cycle by itself once the responder is through.
+
+Every feature has its own toggle, and with the master switch off the mod is exactly vanilla. Safe to add to or remove from an existing city at any time — nothing is written into your save.
 
 Source (open source, MIT): https://github.com/AmicusDeus/EmergencyPriority
 
 Localized into 11 languages (German, Spanish, French, Italian, Japanese, Korean, Polish, Portuguese-BR, Russian, Chinese Simplified &amp; Traditional). Translations are machine-generated — corrections welcome.
 
 
-Made with Claude Code's Opus 4.8 and Fable 5 models.
+Made with Claude Code's Opus 5, Opus 4.8 and Fable 5 models.
 	</LongDescription>
 	<!--Thumbnail-->
 	<Thumbnail Value="Properties/Thumbnail.png" />
@@ -30,7 +46,7 @@ Made with Claude Code's Opus 4.8 and Fable 5 models.
 	<!--Link to the forum post where the mod can be discussed-->
 	<ForumLink Value="" />
 	<!--Version of the mod-->
-	<ModVersion Value="1.06" />
+	<ModVersion Value="1.07" />
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.6.*" />
 	<!--Dependency for the mod, can be set multiple times-->
@@ -38,14 +54,21 @@ Made with Claude Code's Opus 4.8 and Fable 5 models.
 	<!--Required DLC, can be set multiple times. Supported values are "Landmark Buildings", "San Fransisco Set", "Beach Properties", "Urban Promenades", "Modern Architecture"-->
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
+	<!--CURRENT VERSION ONLY. Paradox Mods keeps its own per-version changelog history on the store page, so
+	    carrying old entries forward duplicates what the store already tracks and burns the 5000-char server
+	    limit. Replace this block wholesale on every version bump.-->
 	<ChangeLog>
-v1.06 - Stuck responders stop asking for a new route over and over
+v1.07 - Traffic lights now clear the way for responding vehicles
 
-- FIX: a fire engine, ambulance or police car sitting in a jam could keep requesting a new route every few seconds for as long as the jam lasted, without ever getting anywhere. The cause is that the game works out congestion from a rolling average for that time of day rather than from the traffic actually there right now, so a jam that has just started is barely visible to it, and asking again can simply hand back the road the vehicle is already stuck on.
+NEW: traffic lights along a responding vehicle's route turn green as it approaches, and stay green until it has passed.
 
-Now each repeat request from a vehicle that has not moved waits twice as long as the one before: about 10 seconds, then 20, 40, 80, and 160 at most. The first request is unchanged, because that is the one most likely to help - conditions really may have changed since the vehicle was sent out. The moment the vehicle moves again it goes straight back to being fully responsive.
+The point is not the ambulance itself. Emergency vehicles already drive straight through red lights in this game — what actually stops them is the queue of ordinary cars in front, and that queue does wait at the red. This gives the queue somewhere to go, so it drains out of the way instead of pinning the responder behind it.
 
-It never stops trying, so a responder still gets going when the jam finally clears.
+The game has everything needed for this already and simply never asks. It only signals ahead as far as a vehicle's braking distance reaches, and that is close to nothing once the vehicle has stopped moving — so a responder stuck in a queue, the exact case where it matters most, asks for nothing at all. This mod asks on its behalf, out to a distance you choose.
+
+It works through the game's own signal priority, at the same priority the game already grants emergency vehicles. Lights still change through their normal clearance phases, so cross traffic gets its amber and pedestrian crossings behave as usual. No light is ever forced green, and each junction returns to its normal cycle by itself the moment the responder is through — nothing is left altered in your save, and removing the mod changes nothing back.
+
+Two new settings, under Traffic lights: turn the feature on or off, and set how far ahead of a responder the lights react (40-300 m, default 120 m).
 	</ChangeLog>
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="github" Url="https://github.com/AmicusDeus/EmergencyPriority" />

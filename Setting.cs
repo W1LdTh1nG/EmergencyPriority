@@ -13,6 +13,7 @@ namespace EmergencyPriority
     {
         public const string Section = "Main";
         public const string Group = "Emergency";
+        public const string GroupLights = "Lights";
         public const string GroupGeneral = "General";
 
         public EmergencyPrioritySetting(IMod mod) : base(mod) { }
@@ -39,12 +40,25 @@ namespace EmergencyPriority
         [SettingsUISection(Section, Group)]
         public int RerouteAfterSeconds { get; set; } = 5;
 
+        // Ask the traffic lights on the route ahead for green, and hold it until the responder is through. The green
+        // is for the QUEUE in front of the responder — a responder ignores reds itself. See GreenLightPrioritySystem.
+        [SettingsUISection(Section, GroupLights)]
+        public bool GreenLightPriority { get; set; } = true;
+
+        // How far ahead a responder is seen by the lights on its route, in metres. Generous by design: a petition is
+        // served at the junction's next phase change, so the point is for the light to be green BEFORE it arrives.
+        [SettingsUISlider(min = 40f, max = 300f, step = 10f, unit = "integer")]
+        [SettingsUISection(Section, GroupLights)]
+        public int GreenLightDistance { get; set; } = 120;
+
         public override void SetDefaults()
         {
             Enabled = true;
             DespawnGuard = true;
             AutoReroute = true;
             RerouteAfterSeconds = 5;
+            GreenLightPriority = true;
+            GreenLightDistance = 120;
         }
     }
 }

@@ -29,7 +29,12 @@ namespace EmergencyPriority
             // AI systems (which run in the same phase) can take their delete branch.
             updateSystem.UpdateAfter<EmergencyRepathSystem, StuckMovingObjectSystem>(SystemUpdatePhase.GameSimulation);
 
-            log.Info("[SelfTest] EmergencyPriority loaded (despawn guard + auto re-route).");
+            // Before the light system, so each petition is still standing when it reads. TrafficLightSystem consumes
+            // what it reads (m_Priority is reset to m_Default), so this must re-assert every time it runs — hence the
+            // matching update interval in GreenLightPrioritySystem.
+            updateSystem.UpdateBefore<GreenLightPrioritySystem, TrafficLightSystem>(SystemUpdatePhase.GameSimulation);
+
+            log.Info("[SelfTest] EmergencyPriority loaded (despawn guard + auto re-route + green-light priority).");
         }
 
         public void OnDispose()
@@ -66,6 +71,12 @@ namespace EmergencyPriority
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.AutoReroute)), T("opt.AutoReroute.D") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.RerouteAfterSeconds)), T("opt.RerouteAfterSeconds.L") },
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.RerouteAfterSeconds)), T("opt.RerouteAfterSeconds.D") },
+
+                { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.GroupLights), T("grp.GroupLights") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GreenLightPriority)), T("opt.GreenLightPriority.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GreenLightPriority)), T("opt.GreenLightPriority.D") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GreenLightDistance)), T("opt.GreenLightDistance.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GreenLightDistance)), T("opt.GreenLightDistance.D") },
 
                 { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.GroupGeneral), T("grp.GroupGeneral") },
             };
