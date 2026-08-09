@@ -120,12 +120,29 @@ namespace EmergencyPriority
                     continue;
                 }
 
+                CarCurrentLane current = EntityManager.GetComponentData<CarCurrentLane>(e);
+                DynamicBuffer<CarNavigationLane> lanes = EntityManager.GetBuffer<CarNavigationLane>(e, isReadOnly: true);
+
+                // 🚨 ARRIVED RESPONDERS MUST NOT PETITION. CarFlags.Emergency is NOT cleared on arrival: the fire
+                // engine AI clears it in ParkCar (back at the station) and in ResetPath once Returning, so a unit
+                // parked at a burning building with FireEngineFlags.Extinguishing set still carries the flag for the
+                // whole duration of the fire. Without this guard it would hold every junction within the detection
+                // distance green for minutes, starving the cross traffic at every fire and accident in the city —
+                // the exact opposite of what this mod is for.
+                //
+                // The test is the game's own "is this vehicle still navigating" condition: FillNavigationPaths stops
+                // topping up the lane buffer on EndOfPath / ParkingSpace / Waypoint (CarNavigationSystem.cs:816), so
+                // an arrived vehicle both carries those flags and runs its buffer down to empty. Being STOPPED is
+                // deliberately not part of the test — a responder halted in a queue is precisely who needs the green.
+                if (lanes.Length == 0
+                    || (current.m_LaneFlags & (Game.Vehicles.CarLaneFlags.EndOfPath | Game.Vehicles.CarLaneFlags.ParkingSpace)) != 0)
+                    continue;
+
                 float remaining = budgetMetres;
 
                 // The lane the vehicle is on first: on a signalled connector it is the one holding up the queue, and
                 // it is the lane whose group the junction must serve. Only the part still ahead counts against the
                 // budget — .x is the current position along the curve, .z the lane exit (cf. CarNavigationSystem:2278).
-                CarCurrentLane current = EntityManager.GetComponentData<CarCurrentLane>(e);
                 Petition(current.m_Lane, e);
                 remaining -= LaneLength(current.m_Lane, math.abs(current.m_CurvePosition.z - current.m_CurvePosition.x));
 
@@ -135,7 +152,6 @@ namespace EmergencyPriority
                 // Then the upcoming lanes, in order, until the budget runs out. This buffer is a rolling window the
                 // game keeps topped up to at most 13 entries (CarNavigationSystem.cs:818), so it is inherently a
                 // near-route view — there is no way to reach across the whole city from here, which is just as well.
-                DynamicBuffer<CarNavigationLane> lanes = EntityManager.GetBuffer<CarNavigationLane>(e, isReadOnly: true);
                 for (int j = 0; j < lanes.Length; j++)
                 {
                     CarNavigationLane nav = lanes[j];
