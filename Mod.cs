@@ -16,7 +16,7 @@ namespace EmergencyPriority
 
         public void OnLoad(UpdateSystem updateSystem)
         {
-            log.Info(nameof(OnLoad));
+            log.Info($"{nameof(OnLoad)} assembly={typeof(Mod).Assembly.GetName().Name} from {typeof(Mod).Assembly.Location}");
 
             ActiveSetting = new EmergencyPrioritySetting(this);
             ActiveSetting.RegisterInOptionsUI();
@@ -80,6 +80,8 @@ namespace EmergencyPriority
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.AutoReroute)), T("opt.AutoReroute.D") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.RerouteAfterSeconds)), T("opt.RerouteAfterSeconds.L") },
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.RerouteAfterSeconds)), T("opt.RerouteAfterSeconds.D") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.StuckDespawnSeconds)), T("opt.StuckDespawnSeconds.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.StuckDespawnSeconds)), T("opt.StuckDespawnSeconds.D") },
 
                 { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.GroupLights), T("grp.GroupLights") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GreenLightPriority)), T("opt.GreenLightPriority.L") },

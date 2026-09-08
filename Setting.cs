@@ -42,6 +42,14 @@ namespace EmergencyPriority
         [SettingsUISection(Section, Group)]
         public int RerouteAfterSeconds { get; set; } = 5;
 
+        // Last resort for a responder that has made no progress at all for this long while still en route: delete
+        // it, exactly as the vanilla AI does with a responder it considers stuck, so the call gets a fresh unit.
+        // 0 = never. Before this point the mod already backs off (5 s) and gives up on it (30 s, fresh path,
+        // roads outside released). See EmergencyGhostSystem.
+        [SettingsUISlider(min = 0f, max = 300f, step = 10f, unit = "integer")]
+        [SettingsUISection(Section, Group)]
+        public int StuckDespawnSeconds { get; set; } = 120;
+
         // Ask the traffic lights on the route ahead for green, and hold it until the responder is through. The green
         // is for the QUEUE in front of the responder — a responder ignores reds itself. See GreenLightPrioritySystem.
         [SettingsUISection(Section, GroupLights)]
@@ -99,6 +107,7 @@ namespace EmergencyPriority
             DespawnGuard = true;
             AutoReroute = true;
             RerouteAfterSeconds = 5;
+            StuckDespawnSeconds = 120;
             GreenLightPriority = true;
             GreenLightDistance = 120;
             JunctionClear = true;

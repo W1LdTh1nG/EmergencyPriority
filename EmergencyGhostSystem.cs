@@ -155,12 +155,25 @@ namespace EmergencyPriority
         // angled ambulance sitting behind a pulled-over truck with `reversing` ticking up in the log.
         private const float kRetargetMinHeading = 0.82f;
 
-        // Watchdog. A responder that has not moved kStallMove in kStallFrames while we are assisting it gets
-        // kHandsOffFrames of nothing from us (no push, no pull-over on its behalf, any pass abandoned and unpinned)
-        // so the vanilla nav can untangle whatever we got it into; then we resume. Lights are left alone.
+        // Watchdog, three stages, all measured as "no kStallMove of progress while the vehicle still has somewhere to
+        // go" (nav buffer non-empty, no EndOfPath/EndReached/ParkingSpace — so a fire engine parked at a blaze never
+        // counts as stalled). Sim runs 60 frames/s.
+        //  1. kStallFrames (5 s): kHandsOffFrames of nothing from us (no push, no pull-over on its behalf, any pass
+        //     abandoned and unpinned) so the vanilla nav can untangle whatever we got it into, then we resume;
+        //     alternating while it stays stuck.
+        //  2. kGiveUpFrames (30 s): give up. Hands off for kGiveUpHandsOffFrames, a fresh path requested (Obsolete —
+        //     the same thing EmergencyRepathSystem does, but that only fires on a Blocker, and a vehicle wedged in a
+        //     parking lot may have none), and GivenUp published so GreenLightPrioritySystem / JunctionClearSystem
+        //     stop holding the roads outside for a vehicle that is not coming. Seen in play: an ambulance stuck in
+        //     a car park with the street outside jammed by its own green wave and reservations.
+        //  3. StuckDespawnSeconds (setting, 0 = never): despawn it — Deleted, exactly what the vanilla AI does to a
+        //     responder it considers stuck (AmbulanceAISystem.cs:234-237) — so the request is served by a fresh
+        //     unit instead of sitting behind a vehicle that will never arrive. Lights are left alone throughout.
         private const float kStallMove = 0.5f;
         private const uint kStallFrames = 300;
         private const uint kHandsOffFrames = 300;
+        private const uint kGiveUpFrames = 1800;
+        private const uint kGiveUpHandsOffFrames = 3600;
 
         // Lane states in which a vehicle is not "driving down a road" — parked, arrived, at a building door, on a
         // connection lane, in a parking area — and must not be pushed or stopped. EndOfPath/ParkingSpace are the
@@ -190,7 +203,9 @@ namespace EmergencyPriority
         private const int kLitOff = 14;         // ... and lights taken away again once clear
         private const int kStalls = 15;         // watchdog trips (5 s without movement -> 5 s hands-off)
         private const int kForcedForward = 16;  // nav wanted to reverse behind a stopped car; pushed forward instead
-        private const int kStatCount = 17;
+        private const int kGaveUp = 17;         // 30 s without progress: hands off, repath, released from the walks
+        private const int kDespawned = 18;      // StuckDespawnSeconds without progress: deleted like vanilla would
+        private const int kStatCount = 19;
 
         // An ambulance we lit up, keyed by entity: when it was last held up by traffic.
         public struct LitState
@@ -198,13 +213,20 @@ namespace EmergencyPriority
             public uint m_LastBlockedFrame;
         }
 
-        // Watchdog state per responder: where it last made progress, and until when we are keeping our hands off.
+        // Watchdog state per responder: where it last made progress, until when we are keeping our hands off, when
+        // stage 1 last tripped (so it alternates instead of latching), and whether stage 2 has fired for this stall.
         public struct StallState
         {
             public float3 m_LastPosition;
             public uint m_LastMoveFrame;
             public uint m_HandsOffUntil;
+            public uint m_LastTrip;
+            public bool m_GaveUp;
         }
+
+        // Responders stage 2 has given up on, for the main-thread walks (green wave, junction clearing) to skip.
+        // Refreshed from the job's map every few frames; read-only for everyone else.
+        public static readonly System.Collections.Generic.HashSet<Entity> GivenUp = new System.Collections.Generic.HashSet<Entity>();
 
         // One free-lane pass in progress, keyed by responder. Removed when the responder is back in its home lane,
         // leaves the road, or stops responding.
@@ -228,6 +250,8 @@ namespace EmergencyPriority
             public ComponentTypeHandle<CarNavigation> m_NavigationType;
             public ComponentTypeHandle<CarCurrentLane> m_CurrentLaneType;
             public ComponentTypeHandle<Blocker> m_BlockerType;
+            public ComponentTypeHandle<PathOwner> m_PathOwnerType;
+            public EntityCommandBuffer m_CommandBuffer;
 
             [ReadOnly] public ComponentLookup<Car> m_CarData;
             [ReadOnly] public ComponentLookup<Controller> m_ControllerData;
@@ -253,6 +277,7 @@ namespace EmergencyPriority
             public bool m_PullOver;
             public bool m_UseFreeLane;
             public bool m_LightsInTraffic;
+            public uint m_DespawnFrames;
             public uint m_Frame;
 
             // See the k* slots. Single-threaded schedule, so plain counters are safe.
@@ -268,6 +293,7 @@ namespace EmergencyPriority
                 NativeArray<CarNavigation> navigations = chunk.GetNativeArray(ref m_NavigationType);
                 NativeArray<CarCurrentLane> lanes = chunk.GetNativeArray(ref m_CurrentLaneType);
                 NativeArray<Blocker> blockers = chunk.GetNativeArray(ref m_BlockerType);
+                NativeArray<PathOwner> pathOwners = chunk.GetNativeArray(ref m_PathOwnerType);
                 BufferAccessor<CarNavigationLane> navLanes = chunk.GetBufferAccessor(ref m_NavigationLaneType);
 
                 for (int i = 0; i < chunk.Count; i++)
@@ -354,10 +380,18 @@ namespace EmergencyPriority
                         }
                     }
 
-                    // Watchdog: hands off a responder that has stopped making progress despite our help.
-                    if (HandsOff(entities[i], transforms[i].m_Position, driving, ref lane))
+                    // Watchdog: hands off a responder that has stopped making progress despite our help; give up on
+                    // it after 30 s; despawn it after the configured time.
+                    bool enRoute = navLanes[i].Length != 0
+                        && (lane.m_LaneFlags & (CarLaneFlags.EndOfPath | CarLaneFlags.EndReached | CarLaneFlags.ParkingSpace)) == 0;
+                    PathOwner pathOwner = pathOwners[i];
+                    int verdict = Watchdog(entities[i], transforms[i].m_Position, enRoute, ref lane, ref pathOwner);
+                    if (verdict != 0)
                     {
                         lanes[i] = lane;
+                        pathOwners[i] = pathOwner;
+                        if (verdict == 2)
+                            m_CommandBuffer.AddComponent(entities[i], default(Deleted));
                         continue;
                     }
 
@@ -458,38 +492,66 @@ namespace EmergencyPriority
                 }
             }
 
-            // Watchdog for one responder. Returns true while we should keep our hands off it. Abandons and unpins any
-            // pass when it trips, so vanilla's lane selection is free again.
-            private bool HandsOff(Entity entity, float3 position, bool driving, ref CarCurrentLane lane)
+            // Watchdog for one responder. Returns 0 = assist as normal, 1 = hands off this tick, 2 = despawn it.
+            // Abandons and unpins any pass whenever it trips, so vanilla's lane selection is free again.
+            private int Watchdog(Entity entity, float3 position, bool enRoute, ref CarCurrentLane lane, ref PathOwner pathOwner)
             {
-                if (!driving)
+                if (!enRoute)
                 {
                     m_Stalls.Remove(entity);
-                    return false;
+                    return 0;
                 }
                 if (!m_Stalls.TryGetValue(entity, out StallState stall))
                     stall = new StallState { m_LastPosition = position, m_LastMoveFrame = m_Frame };
                 if (math.distancesq(position, stall.m_LastPosition) > kStallMove * kStallMove)
                 {
+                    // Progress: everything is forgiven. (A give-up's hands-off still runs its course.)
                     stall.m_LastPosition = position;
                     stall.m_LastMoveFrame = m_Frame;
+                    stall.m_GaveUp = false;
                 }
-                bool handsOff = m_Frame < stall.m_HandsOffUntil;
-                if (!handsOff && m_Frame - stall.m_LastMoveFrame >= kStallFrames)
+                uint stalled = m_Frame - stall.m_LastMoveFrame;
+
+                // Stage 3: gone for good, like the vanilla AI would do with a stuck responder.
+                if (m_DespawnFrames != 0 && stalled >= m_DespawnFrames)
+                {
+                    m_Stalls.Remove(entity);
+                    m_Passes.Remove(entity);
+                    m_Lit.Remove(entity);
+                    m_Stats[kDespawned]++;
+                    return 2;
+                }
+
+                bool tripped = false;
+
+                // Stage 2: give up — long hands-off, fresh path, released from the main-thread walks.
+                if (!stall.m_GaveUp && stalled >= kGiveUpFrames)
+                {
+                    stall.m_GaveUp = true;
+                    stall.m_HandsOffUntil = m_Frame + kGiveUpHandsOffFrames;
+                    if ((pathOwner.m_State & (PathFlags.Pending | PathFlags.Failed | PathFlags.Obsolete)) == 0)
+                        pathOwner.m_State |= PathFlags.Obsolete;
+                    tripped = true;
+                    m_Stats[kGaveUp]++;
+                }
+                // Stage 1: short hands-off, alternating with assistance while the stall lasts.
+                else if (!stall.m_GaveUp && stalled >= kStallFrames && m_Frame >= stall.m_HandsOffUntil
+                    && m_Frame - stall.m_LastTrip >= kStallFrames + kHandsOffFrames)
                 {
                     stall.m_HandsOffUntil = m_Frame + kHandsOffFrames;
-                    stall.m_LastMoveFrame = m_Frame;
-                    handsOff = true;
+                    stall.m_LastTrip = m_Frame;
+                    tripped = true;
                     m_Stats[kStalls]++;
-                    if (m_Passes.TryGetValue(entity, out PassState pass))
-                    {
-                        StartLaneChange(ref lane, pass.m_HomeLane);
-                        lane.m_LaneFlags &= ~CarLaneFlags.FixedLane;
-                        m_Passes.Remove(entity);
-                    }
+                }
+
+                if (tripped && m_Passes.TryGetValue(entity, out PassState pass))
+                {
+                    StartLaneChange(ref lane, pass.m_HomeLane);
+                    lane.m_LaneFlags &= ~CarLaneFlags.FixedLane;
+                    m_Passes.Remove(entity);
                 }
                 m_Stalls[entity] = stall;
-                return handsOff;
+                return (m_Frame < stall.m_HandsOffUntil) ? 1 : 0;
             }
 
             private bool IsHandsOff(Entity entity)
@@ -721,6 +783,7 @@ namespace EmergencyPriority
 
         private EntityQuery m_CarQuery;
         private SimulationSystem m_Sim;
+        private EndFrameBarrier m_EndFrameBarrier;
         private NativeArray<int> m_Stats;
         private NativeParallelHashMap<Entity, PassState> m_Passes;
         private NativeParallelHashMap<Entity, LitState> m_Lit;
@@ -732,6 +795,7 @@ namespace EmergencyPriority
         {
             base.OnCreate();
             m_Sim = World.GetOrCreateSystemManaged<SimulationSystem>();
+            m_EndFrameBarrier = World.GetOrCreateSystemManaged<EndFrameBarrier>();
             m_Stats = new NativeArray<int>(kStatCount, Allocator.Persistent);
             m_Passes = new NativeParallelHashMap<Entity, PassState>(64, Allocator.Persistent);
             m_Lit = new NativeParallelHashMap<Entity, LitState>(64, Allocator.Persistent);
@@ -749,6 +813,7 @@ namespace EmergencyPriority
                     ComponentType.ReadWrite<CarNavigation>(),
                     ComponentType.ReadWrite<CarCurrentLane>(),
                     ComponentType.ReadWrite<Blocker>(),
+                    ComponentType.ReadWrite<PathOwner>(),
                 },
                 None = new[]
                 {
@@ -772,6 +837,7 @@ namespace EmergencyPriority
                 m_Lit.Dispose();
             if (m_Stalls.IsCreated)
                 m_Stalls.Dispose();
+            GivenUp.Clear();
             base.OnDestroy();
         }
 
@@ -789,6 +855,24 @@ namespace EmergencyPriority
             m_CarQuery.ResetFilter();
             m_CarQuery.SetSharedComponentFilter(new UpdateFrame(frame % 16));
 
+            // Publish the given-up set for the main-thread walks. Last frame's job is long complete (CarMoveSystem
+            // waited on it), so this Complete() costs nothing.
+            if ((frame & 3) == 0)
+            {
+                Dependency.Complete();
+                GivenUp.Clear();
+                if (m_Stalls.Count() != 0)
+                {
+                    NativeKeyValueArrays<Entity, StallState> stalls = m_Stalls.GetKeyValueArrays(Allocator.Temp);
+                    for (int i = 0; i < stalls.Length; i++)
+                    {
+                        if (stalls.Values[i].m_GaveUp && frame < stalls.Values[i].m_HandsOffUntil)
+                            GivenUp.Add(stalls.Keys[i]);
+                    }
+                    stalls.Dispose();
+                }
+            }
+
             GhostJob job = new GhostJob
             {
                 m_EntityType = GetEntityTypeHandle(),
@@ -800,6 +884,8 @@ namespace EmergencyPriority
                 m_NavigationType = GetComponentTypeHandle<CarNavigation>(isReadOnly: false),
                 m_CurrentLaneType = GetComponentTypeHandle<CarCurrentLane>(isReadOnly: false),
                 m_BlockerType = GetComponentTypeHandle<Blocker>(isReadOnly: false),
+                m_PathOwnerType = GetComponentTypeHandle<PathOwner>(isReadOnly: false),
+                m_CommandBuffer = m_EndFrameBarrier.CreateCommandBuffer(),
                 m_CarData = GetComponentLookup<Car>(isReadOnly: true),
                 m_ControllerData = GetComponentLookup<Controller>(isReadOnly: true),
                 m_MovingData = GetComponentLookup<Moving>(isReadOnly: true),
@@ -822,11 +908,13 @@ namespace EmergencyPriority
                 m_PullOver = s.TrafficPullsOver,
                 m_UseFreeLane = s.GhostUsesFreeLane,
                 m_LightsInTraffic = s.LightsInTraffic,
+                m_DespawnFrames = (uint)math.max(0, s.StuckDespawnSeconds) * 60u,
                 m_Frame = frame,
                 m_Stats = m_Stats,
             };
-            // Single-threaded on purpose: the bucket is small, m_Stats is a plain counter and m_Passes a plain map.
+            // Single-threaded on purpose: the bucket is small, m_Stats is a plain counter and the maps are plain maps.
             Dependency = JobChunkExtensions.Schedule(job, m_CarQuery, Dependency);
+            m_EndFrameBarrier.AddJobHandleForProducer(Dependency);
 
             // Sweep passes whose responder has despawned or stood down, so the map cannot grow unbounded.
             if (frame - m_LastSweep >= 1024)
@@ -870,7 +958,7 @@ namespace EmergencyPriority
                     + $" pushed={m_Stats[kPushed]} pushedCrossing={m_Stats[kPushedCrossing]} retargeted={m_Stats[kRetargeted]} pulledOver={m_Stats[kPulledOver]}"
                     + $" passes={m_Stats[kPassStarted]} returns={m_Stats[kPassReturned]} passesLive={m_Passes.Count()}"
                     + $" litUp={m_Stats[kLitUp]} litOff={m_Stats[kLitOff]} litLive={m_Lit.Count()}"
-                    + $" stalls={m_Stats[kStalls]} forcedForward={m_Stats[kForcedForward]}"
+                    + $" stalls={m_Stats[kStalls]} forcedForward={m_Stats[kForcedForward]} gaveUp={m_Stats[kGaveUp]} despawned={m_Stats[kDespawned]} givenUpLive={GivenUp.Count}"
                     + $" skipped: noBlocker={m_Stats[kSkipNoBlocker]} crossingMoving={m_Stats[kSkipCrossing]}"
                     + $" oncoming={m_Stats[kSkipOncoming]} otherType={m_Stats[kSkipOtherType]} notCar={m_Stats[kSkipNotCar]}"
                     + $" notDriving={m_Stats[kSkipNotDriving]} reversing={m_Stats[kSkipReversing]}");

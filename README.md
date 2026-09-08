@@ -9,6 +9,7 @@ Vanilla CS2 deletes a responding emergency vehicle the moment it's flagged as st
 
 - **Despawn guard** — when a responder is flagged stuck, it requests a fresh route instead of being deleted, so it keeps responding.
 - **Re-route around congestion** — a responder blocked behind traffic for too long looks for a new route (vanilla only prices congestion once, at dispatch).
+- **Never wedged for good** — a responder that stops making progress gets a staged response: after 5 s the mod backs off and lets the vanilla driving logic untangle it; after 30 s it gives up on it (fresh route, and the lights and lanes ahead are no longer held for it, so the street outside a blocked car park does not jam); after a configurable time (default 2 minutes) it is removed exactly as the game removes a stuck vehicle, so the call gets a fresh unit.
 - **Green lights along the route** — the traffic lights ahead of a responder are asked for green and hold it until it has passed. The green is for the queue of ordinary cars in front, which is what actually stops a responder (it already runs reds itself).
 - **Keep the junctions ahead clear** — the lanes a responder is about to drive through are reserved for it at emergency priority, so cross traffic stops short of them and pedestrians wait at the kerb until it has passed. This is the game's own right-of-way mechanism, asked further ahead than vanilla does, so it works at unsignalled junctions and roundabouts as well as at lights.
 - **Drive through stopped traffic** — a responder boxed in by stopped cars in its own lane, or by stopped cross traffic in a gridlocked junction or roundabout, drives through them at a configurable speed, as if the queue had pulled aside. Moving cross traffic, pedestrians and signals are never driven through.
@@ -23,6 +24,7 @@ Everything is opt-in; turn the mod off for exact vanilla behaviour.
 - Prevent stuck responders from despawning
 - Re-route around congestion
 - Re-route after N seconds blocked (slider)
+- Despawn a responder stuck for N seconds, 0 = never (slider)
 - Green lights along the route, and how far ahead they react (slider)
 - Keep the junctions ahead clear, and how far ahead (slider)
 - Drive through stopped traffic, and the speed through parted traffic (slider)
