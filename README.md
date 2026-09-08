@@ -9,6 +9,10 @@ Vanilla CS2 deletes a responding emergency vehicle the moment it's flagged as st
 
 - **Despawn guard** — when a responder is flagged stuck, it requests a fresh route instead of being deleted, so it keeps responding.
 - **Re-route around congestion** — a responder blocked behind traffic for too long looks for a new route (vanilla only prices congestion once, at dispatch).
+- **Green lights along the route** — the traffic lights ahead of a responder are asked for green and hold it until it has passed. The green is for the queue of ordinary cars in front, which is what actually stops a responder (it already runs reds itself).
+- **Drive through stopped traffic** — a responder boxed in by stopped cars in its own lane, or by stopped cross traffic in a gridlocked junction or roundabout, drives through them at a configurable speed, as if the queue had pulled aside. Moving cross traffic, pedestrians and signals are never driven through.
+- **Slow traffic pulls over** — in slow-moving traffic, the car directly ahead of a responder in the same lane brakes to a stop for it, so the responder passes car after car to the head of the queue.
+- **Use a free lane to pass the queue** — a queued responder moves into an empty neighbouring lane, passes the queue there, and cuts back into its own lane just before the junction, even if that lane is for a different turn. Works on either side and for left- or right-hand traffic.
 
 Everything is opt-in; turn the mod off for exact vanilla behaviour.
 
@@ -17,9 +21,14 @@ Everything is opt-in; turn the mod off for exact vanilla behaviour.
 - Prevent stuck responders from despawning
 - Re-route around congestion
 - Re-route after N seconds blocked (slider)
+- Green lights along the route, and how far ahead they react (slider)
+- Drive through stopped traffic, and the speed through parted traffic (slider)
+- Slow traffic pulls over
+- Use a free lane to pass the queue
 
 ## Under the hood (for the curious / security-minded)
-- **Pure ECS — no Harmony patches.** It reads emergency vehicles (`CarFlags.Emergency`) and writes `PathOwner.m_State`, the same field the game itself uses to request a repath.
+- **Pure ECS — no Harmony patches.** It reads emergency vehicles (`CarFlags.Emergency`) and writes only fields the game itself writes: `PathOwner.m_State` (the repath request), `LaneSignal.m_Priority`/`m_Petitioner` (the signal petition), and — for the drive-through, pull-over and free-lane features — `CarNavigation.m_MaxSpeed`/`m_TargetPosition`, `CarCurrentLane`'s lane-change fields and `Blocker.m_MaxSpeed`, in the same frame slot between the game's navigation and movement jobs. Nothing is written into the save; every effect stops the moment the mod does.
+- **No vehicle is ever moved sideways or teleported.** The drive-through works because the game has no collisions between driving vehicles; a responder simply overlaps the car it passes for a moment.
 - **No network access at all** — no HTTP, no sockets. Nothing leaves your machine.
 - **Filesystem:** writes only its own settings file and a log (`EmergencyPriority.Mod.log`) in the game's log folder. Nothing else.
 - **Dependencies:** none beyond the base game.
