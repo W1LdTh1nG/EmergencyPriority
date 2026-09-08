@@ -96,7 +96,7 @@ namespace EmergencyPriority
         protected override void OnUpdate()
         {
             EmergencyPrioritySetting s = Mod.ActiveSetting;
-            if (s == null || !s.Enabled || (!s.DespawnGuard && !s.AutoReroute))
+            if (s == null || !s.Enabled)
                 return;
 
             uint frame = m_Sim.frameIndex;
@@ -125,7 +125,9 @@ namespace EmergencyPriority
                 bool pending = (po.m_State & PathFlags.Pending) != 0;
 
                 // (1) Despawn guard: swap the give-up flag for a repath order before the AI's delete branch sees it.
-                if (s.DespawnGuard && (po.m_State & PathFlags.Stuck) != 0)
+                // Always on while the mod is: whether a responder is ever despawned is EmergencyGhostSystem's
+                // decision (StuckDespawnSeconds, 0 = never), not the vanilla stuck detector's.
+                if ((po.m_State & PathFlags.Stuck) != 0)
                 {
                     po.m_State &= ~PathFlags.Stuck;
                     if (!pending)
@@ -196,7 +198,7 @@ namespace EmergencyPriority
             if (frame - m_LastLog >= 16384)
             {
                 m_LastLog = frame;
-                Mod.log.Info($"[SelfTest] emergencyRepath status: enabled={s.Enabled} guard={s.DespawnGuard} reroute={s.AutoReroute} watchedResponders={m_Watched.Count} guardedStuckTotal={m_GuardedStuck} reroutesTotal={m_Reroutes}");
+                Mod.log.Info($"[SelfTest] emergencyRepath status: enabled={s.Enabled} despawnAfter={s.StuckDespawnSeconds}s reroute={s.AutoReroute} watchedResponders={m_Watched.Count} guardedStuckTotal={m_GuardedStuck} reroutesTotal={m_Reroutes}");
             }
         }
 

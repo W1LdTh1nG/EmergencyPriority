@@ -7,7 +7,7 @@ Keeps responding fire engines, ambulances and police cars alive and moving throu
 ## What it does
 Vanilla CS2 deletes a responding emergency vehicle the moment it's flagged as stuck in traffic, and never re-evaluates its route after dispatch. This mod:
 
-- **Despawn guard** — when a responder is flagged stuck, it requests a fresh route instead of being deleted, so it keeps responding.
+- **Despawn guard** — when the game flags a responder as stuck, it requests a fresh route instead of being deleted, so it keeps responding. Whether it is ever given up on is the mod's own, slower decision (below).
 - **Re-route around congestion** — a responder blocked behind traffic for too long looks for a new route (vanilla only prices congestion once, at dispatch).
 - **Never wedged for good** — a responder that stops making progress gets a staged response: after 5 s the mod backs off and lets the vanilla driving logic untangle it; after 30 s it gives up on it (fresh route, and the lights and lanes ahead are no longer held for it, so the street outside a blocked car park does not jam); after a configurable time (default 2 minutes) it is removed exactly as the game removes a stuck vehicle, so the call gets a fresh unit.
 - **Green lights along the route** — the traffic lights ahead of a responder are asked for green and hold it until it has passed. The green is for the queue of ordinary cars in front, which is what actually stops a responder (it already runs reds itself).
@@ -21,7 +21,6 @@ Everything is opt-in; turn the mod off for exact vanilla behaviour.
 
 ## Options (Options → Mods → Emergency Priority)
 - Enable / disable
-- Prevent stuck responders from despawning
 - Re-route around congestion
 - Re-route after N seconds blocked (slider)
 - Despawn a responder stuck for N seconds, 0 = never (slider)

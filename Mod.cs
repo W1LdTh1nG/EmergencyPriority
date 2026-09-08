@@ -74,8 +74,6 @@ namespace EmergencyPriority
                 { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.Group), T("grp.Group") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.Enabled)), T("opt.Enabled.L") },
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.Enabled)), T("opt.Enabled.D") },
-                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.DespawnGuard)), T("opt.DespawnGuard.L") },
-                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.DespawnGuard)), T("opt.DespawnGuard.D") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.AutoReroute)), T("opt.AutoReroute.L") },
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.AutoReroute)), T("opt.AutoReroute.D") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.RerouteAfterSeconds)), T("opt.RerouteAfterSeconds.L") },
