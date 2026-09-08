@@ -15,6 +15,7 @@ namespace EmergencyPriority
         public const string Group = "Emergency";
         public const string GroupLights = "Lights";
         public const string GroupGhost = "Ghost";
+        public const string GroupJunctions = "Junctions";
         public const string GroupGeneral = "General";
 
         public EmergencyPrioritySetting(IMod mod) : base(mod) { }
@@ -52,6 +53,18 @@ namespace EmergencyPriority
         [SettingsUISection(Section, GroupLights)]
         public int GreenLightDistance { get; set; } = 120;
 
+        // Reserve the lanes ahead of a responder at emergency priority so cross traffic stops short of them and
+        // pedestrians wait at the kerb — the game's own right-of-way mechanism, asked further ahead than vanilla
+        // does. Works at unsignalled junctions and roundabouts too. See JunctionClearSystem.
+        [SettingsUISection(Section, GroupJunctions)]
+        public bool JunctionClear { get; set; } = true;
+
+        // How far ahead of the responder lanes are reserved, in metres. Long enough to cover the junction it is
+        // approaching; too long holds several junctions at once.
+        [SettingsUISlider(min = 20f, max = 150f, step = 10f, unit = "integer")]
+        [SettingsUISection(Section, GroupJunctions)]
+        public int JunctionClearDistance { get; set; } = 60;
+
         // A responder boxed in by STOPPED traffic in its own lane creeps through the car in front at walking pace,
         // as if the queue had pulled aside. Only same-lane vehicle blockers; never cross traffic, pedestrians or
         // signals. See EmergencyGhostSystem.
@@ -88,6 +101,8 @@ namespace EmergencyPriority
             RerouteAfterSeconds = 5;
             GreenLightPriority = true;
             GreenLightDistance = 120;
+            JunctionClear = true;
+            JunctionClearDistance = 60;
             GhostThroughJams = true;
             GhostCrawlSpeed = 6f;
             TrafficPullsOver = true;

@@ -39,7 +39,11 @@ namespace EmergencyPriority
             // list and do not touch it. See EmergencyGhostSystem for why this is the one writable seam.
             updateSystem.UpdateAfter<EmergencyGhostSystem, CarNavigationSystem.Actions>(SystemUpdatePhase.GameSimulation);
 
-            log.Info("[SelfTest] EmergencyPriority loaded (despawn guard + auto re-route + green-light priority + ghost-through-jams).");
+            // Before the reservation rotation so each write lands in the slot the next 16 frames read from. Interval
+            // 4 in the system keeps a reservation live whichever UpdateFrame bucket a lane is in.
+            updateSystem.UpdateBefore<JunctionClearSystem, NetLaneReservationSystem>(SystemUpdatePhase.GameSimulation);
+
+            log.Info("[SelfTest] EmergencyPriority loaded (despawn guard + auto re-route + green-light priority + ghost-through-jams + junction clearing).");
         }
 
         public void OnDispose()
@@ -82,6 +86,12 @@ namespace EmergencyPriority
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GreenLightPriority)), T("opt.GreenLightPriority.D") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GreenLightDistance)), T("opt.GreenLightDistance.L") },
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GreenLightDistance)), T("opt.GreenLightDistance.D") },
+
+                { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.GroupJunctions), T("grp.GroupJunctions") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.JunctionClear)), T("opt.JunctionClear.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.JunctionClear)), T("opt.JunctionClear.D") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.JunctionClearDistance)), T("opt.JunctionClearDistance.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.JunctionClearDistance)), T("opt.JunctionClearDistance.D") },
 
                 { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.GroupGhost), T("grp.GroupGhost") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GhostThroughJams)), T("opt.GhostThroughJams.L") },
