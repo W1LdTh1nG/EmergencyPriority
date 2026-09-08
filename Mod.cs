@@ -92,6 +92,8 @@ namespace EmergencyPriority
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.TrafficPullsOver)), T("opt.TrafficPullsOver.D") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GhostUsesFreeLane)), T("opt.GhostUsesFreeLane.L") },
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GhostUsesFreeLane)), T("opt.GhostUsesFreeLane.D") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.LightsInTraffic)), T("opt.LightsInTraffic.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.LightsInTraffic)), T("opt.LightsInTraffic.D") },
 
                 { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.GroupGeneral), T("grp.GroupGeneral") },
             };

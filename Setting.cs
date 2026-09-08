@@ -75,6 +75,11 @@ namespace EmergencyPriority
         [SettingsUISection(Section, GroupGhost)]
         public bool GhostUsesFreeLane { get; set; } = true;
 
+        // An ambulance carrying a patient without sirens (vanilla only lights a critical patient) puts them on when
+        // traffic holds it up, and off again once through. See EmergencyGhostSystem.
+        [SettingsUISection(Section, GroupGhost)]
+        public bool LightsInTraffic { get; set; } = true;
+
         public override void SetDefaults()
         {
             Enabled = true;
@@ -87,6 +92,7 @@ namespace EmergencyPriority
             GhostCrawlSpeed = 6f;
             TrafficPullsOver = true;
             GhostUsesFreeLane = true;
+            LightsInTraffic = true;
         }
     }
 }
