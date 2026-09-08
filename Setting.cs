@@ -8,7 +8,7 @@ namespace EmergencyPriority
     // AssetDatabase.SaveSpecificSetting(GetType().Name), which resolves by simple name and breaks on the first match —
     // so two mods both named `Setting` write into whichever one wins the race. Nothing on disk derives from the class
     // name; the [FileLocation] value and the LoadSettings(...) name argument are the on-disk identity, not this.
-    [FileLocation(nameof(EmergencyPriority))]
+    [FileLocation("EmergencyPriority_Ghost")]
     public class EmergencyPrioritySetting : ModSetting
     {
         public const string Section = "Main";

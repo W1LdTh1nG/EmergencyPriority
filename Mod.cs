@@ -23,7 +23,7 @@ namespace EmergencyPriority
             var lm = GameManager.instance.localizationManager;
             foreach (var locale in lm.GetSupportedLocales())
                 lm.AddSource(locale, new LocaleEn(ActiveSetting, locale));
-            AssetDatabase.global.LoadSettings(nameof(EmergencyPriority), ActiveSetting, new EmergencyPrioritySetting(this));
+            AssetDatabase.global.LoadSettings("EmergencyPriority_Ghost", ActiveSetting, new EmergencyPrioritySetting(this));
 
             // After the stuck detector so a freshly raised Stuck flag is converted to a repath before the vehicle
             // AI systems (which run in the same phase) can take their delete branch.
@@ -65,7 +65,7 @@ namespace EmergencyPriority
         {
             return new Dictionary<string, string>
             {
-                { m_S.GetSettingsLocaleID(), "Emergency Priority" },
+                { m_S.GetSettingsLocaleID(), "Emergency Priority Ghost" },
                 { m_S.GetOptionTabLocaleID(EmergencyPrioritySetting.Section), "Main" },
                 { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.Group), T("grp.Group") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.Enabled)), T("opt.Enabled.L") },
