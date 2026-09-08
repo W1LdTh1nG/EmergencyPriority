@@ -27,10 +27,14 @@ namespace EmergencyPriority
         [SettingsUISection(Section, Group)]
         public bool Enabled { get; set; } = true;
 
-        // Vanilla deletes a responding vehicle outright once the stuck detector flags it. The guard converts that
-        // give-up into a fresh pathfind instead, so the unit keeps responding.
+        // Vanilla deletes a responding vehicle outright the moment the stuck detector flags it. With the mod on that
+        // never happens (EmergencyRepathSystem turns the flag into a fresh pathfind instead); this is the mod's own,
+        // slower verdict: a responder that has made no progress at all for this long while still en route is
+        // deleted so the call gets a fresh unit. 0 = never. Before this point the mod has already backed off
+        // (5 s) and given up on it (30 s: fresh path, roads outside released). See EmergencyGhostSystem.
+        [SettingsUISlider(min = 0f, max = 300f, step = 10f, unit = "integer")]
         [SettingsUISection(Section, Group)]
-        public bool DespawnGuard { get; set; } = true;
+        public int StuckDespawnSeconds { get; set; } = 120;
 
         // Re-route a responder that has been sitting behind a blocker for a while — vanilla only prices congestion
         // at dispatch time and never re-evaluates the route en route.
@@ -41,14 +45,6 @@ namespace EmergencyPriority
         [SettingsUISlider(min = 2f, max = 30f, step = 1f, unit = "integer")]
         [SettingsUISection(Section, Group)]
         public int RerouteAfterSeconds { get; set; } = 5;
-
-        // Last resort for a responder that has made no progress at all for this long while still en route: delete
-        // it, exactly as the vanilla AI does with a responder it considers stuck, so the call gets a fresh unit.
-        // 0 = never. Before this point the mod already backs off (5 s) and gives up on it (30 s, fresh path,
-        // roads outside released). See EmergencyGhostSystem.
-        [SettingsUISlider(min = 0f, max = 300f, step = 10f, unit = "integer")]
-        [SettingsUISection(Section, Group)]
-        public int StuckDespawnSeconds { get; set; } = 120;
 
         // Ask the traffic lights on the route ahead for green, and hold it until the responder is through. The green
         // is for the QUEUE in front of the responder — a responder ignores reds itself. See GreenLightPrioritySystem.
@@ -104,7 +100,6 @@ namespace EmergencyPriority
         public override void SetDefaults()
         {
             Enabled = true;
-            DespawnGuard = true;
             AutoReroute = true;
             RerouteAfterSeconds = 5;
             StuckDespawnSeconds = 120;
