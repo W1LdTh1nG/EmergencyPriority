@@ -62,6 +62,17 @@ namespace EmergencyPriority
     // original lane is by construction the one vanilla chose for the upcoming turn. Should the return not finish
     // by the stop line, vanilla's own pop drops the vehicle onto the path's connector regardless (:1911-1917).
     //
+    // LIGHTS ON TO GET THROUGH TRAFFIC. An ambulance only carries CarFlags.Emergency while dispatched to a healthcare
+    // request or while its patient is flagged Critical (AmbulanceAISystem.ResetPath, :742-760); a routine transport
+    // back to hospital drives as ordinary traffic and queues like everyone else. Real crews put the lights on for the
+    // jam and off again once through. So: an ambulance with a patient aboard (AmbulanceFlags.Transporting) that is
+    // held below kLightsOnSpeed by traffic gets the Emergency flag set here — which is everything at once: priority
+    // 108, the doubled speed-limit factor, the warning lights (CarMoveSystem raises TransformFlags.WarningLights from
+    // the flag), the green wave, and every feature in this file — and gets it cleared again kLightsOffDelay after it
+    // was last held up. The AI only rewrites the flag when a new path lands, when it parks, or when it takes a
+    // dispatch (:347, :697, :742-760), so the two never fight: if the AI does reset it mid-jam, the next tick simply
+    // lights it up again.
+    //
     // VANILLA ALREADY DOES THE DRIVE-THROUGH, ONCE. CarLaneSpeedIterator.UpdateMaxSpeed floors the speed at 3 m/s
     // for the single entity named by CarCurrentLane.m_LaneFlags & IgnoreBlocker (:1537
     // `select(v, 3f, ignore && v < 3f)`), which the game sets after a blocked-lane repath (:1151).
@@ -130,6 +141,13 @@ namespace EmergencyPriority
         private const float kMinPassRun = 60f;
         private const float kReturnDistance = 30f;
 
+        // Lights in traffic: a transporting ambulance held below kLightsOnSpeed by a vehicle lights up; it stays lit
+        // while held below kLightsOffSpeed and goes dark kLightsOffDelayFrames (~5 s at 60 sim frames/s) after it
+        // was last held up, so a stop-start queue does not strobe it.
+        private const float kLightsOnSpeed = 3f;
+        private const float kLightsOffSpeed = 6f;
+        private const uint kLightsOffDelayFrames = 300;
+
         // Lane states in which a vehicle is not "driving down a road" — parked, arrived, at a building door, on a
         // connection lane, in a parking area — and must not be pushed or stopped. EndOfPath/ParkingSpace are the
         // same guard the green-light system uses (CarFlags.Emergency is NOT cleared on arrival); the rest are lane
@@ -154,7 +172,15 @@ namespace EmergencyPriority
         private const int kPulledOver = 10;     // civilians braked for a responder behind them
         private const int kPassStarted = 11;    // free-lane passes begun
         private const int kPassReturned = 12;   // ... and returns into the home lane begun
-        private const int kStatCount = 13;
+        private const int kLitUp = 13;          // transporting ambulances given lights for a jam
+        private const int kLitOff = 14;         // ... and lights taken away again once clear
+        private const int kStatCount = 15;
+
+        // An ambulance we lit up, keyed by entity: when it was last held up by traffic.
+        public struct LitState
+        {
+            public uint m_LastBlockedFrame;
+        }
 
         // One free-lane pass in progress, keyed by responder. Removed when the responder is back in its home lane,
         // leaves the road, or stops responding.
@@ -170,7 +196,7 @@ namespace EmergencyPriority
         private struct GhostJob : IJobChunk
         {
             [ReadOnly] public EntityTypeHandle m_EntityType;
-            [ReadOnly] public ComponentTypeHandle<Car> m_CarType;
+            public ComponentTypeHandle<Car> m_CarType;
             [ReadOnly] public ComponentTypeHandle<Game.Objects.Transform> m_TransformType;
             [ReadOnly] public ComponentTypeHandle<Moving> m_MovingType;
             [ReadOnly] public ComponentTypeHandle<PrefabRef> m_PrefabRefType;
@@ -193,12 +219,16 @@ namespace EmergencyPriority
             [ReadOnly] public ComponentLookup<ObjectGeometryData> m_PrefabObjectGeometryData;
             [ReadOnly] public BufferLookup<LaneObject> m_LaneObjects;
             [ReadOnly] public BufferLookup<Game.Net.SubLane> m_SubLanes;
+            [ReadOnly] public ComponentLookup<Game.Vehicles.Ambulance> m_AmbulanceData;
 
             public NativeParallelHashMap<Entity, PassState> m_Passes;
+            public NativeParallelHashMap<Entity, LitState> m_Lit;
 
             public float m_GhostSpeed;
             public bool m_PullOver;
             public bool m_UseFreeLane;
+            public bool m_LightsInTraffic;
+            public uint m_Frame;
 
             // See the k* slots. Single-threaded schedule, so plain counters are safe.
             public NativeArray<int> m_Stats;
@@ -232,6 +262,27 @@ namespace EmergencyPriority
 
                     if ((cars[i].m_Flags & CarFlags.Emergency) == 0)
                     {
+                        // A transporting ambulance held up by traffic: lights on. Everything else (priority, ghost,
+                        // green wave) follows from the flag on its next tick.
+                        if (m_LightsInTraffic && m_AmbulanceData.TryGetComponent(entities[i], out Game.Vehicles.Ambulance ambulance))
+                        {
+                            Blocker held = blockers[i];
+                            bool transporting = driving && (ambulance.m_State & AmbulanceFlags.Transporting) != 0
+                                && (ambulance.m_State & (AmbulanceFlags.AtTarget | AmbulanceFlags.Disembarking | AmbulanceFlags.Disabled)) == 0;
+                            if (transporting && held.m_Blocker != Entity.Null && navigation.m_MaxSpeed < kLightsOnSpeed
+                                && (held.m_Type == BlockerType.Continuing || held.m_Type == BlockerType.Crossing))
+                            {
+                                Car lit = cars[i];
+                                lit.m_Flags |= CarFlags.Emergency;
+                                cars[i] = lit;
+                                m_Lit[entities[i]] = new LitState { m_LastBlockedFrame = m_Frame };
+                                m_Stats[kLitUp]++;
+                                continue;
+                            }
+                            // Not (or no longer) a candidate: forget any entry left behind by an AI flag reset.
+                            m_Lit.Remove(entities[i]);
+                        }
+
                         if (m_PullOver && driving && navigation.m_MaxSpeed < kSlowTrafficSpeed
                             && ResponderCloseBehind(entities[i], lane))
                         {
@@ -252,6 +303,32 @@ namespace EmergencyPriority
                     // ---- Responder with sirens on. ----
 
                     Blocker blocker = blockers[i];
+
+                    // An ambulance we lit up for a jam: keep the lights while it is still held up, drop them once it
+                    // has been clear for the delay or has stopped transporting.
+                    if (m_Lit.TryGetValue(entities[i], out LitState litState))
+                    {
+                        bool stillTransporting = driving
+                            && m_AmbulanceData.TryGetComponent(entities[i], out Game.Vehicles.Ambulance litAmbulance)
+                            && (litAmbulance.m_State & AmbulanceFlags.Transporting) != 0;
+                        bool heldUp = blocker.m_Blocker != Entity.Null && navigation.m_MaxSpeed < kLightsOffSpeed
+                            && (blocker.m_Type == BlockerType.Continuing || blocker.m_Type == BlockerType.Crossing);
+                        if (stillTransporting && heldUp)
+                        {
+                            litState.m_LastBlockedFrame = m_Frame;
+                            m_Lit[entities[i]] = litState;
+                        }
+                        else if (!stillTransporting || m_Frame - litState.m_LastBlockedFrame >= kLightsOffDelayFrames)
+                        {
+                            Car dark = cars[i];
+                            dark.m_Flags &= ~CarFlags.Emergency;
+                            cars[i] = dark;
+                            m_Lit.Remove(entities[i]);
+                            m_Passes.Remove(entities[i]);
+                            m_Stats[kLitOff]++;
+                            continue;
+                        }
+                    }
 
                     // Free-lane pass bookkeeping runs every tick for a responder with a pass in progress, and may
                     // start one for a responder queued behind a same-lane blocker.
@@ -561,6 +638,7 @@ namespace EmergencyPriority
         private SimulationSystem m_Sim;
         private NativeArray<int> m_Stats;
         private NativeParallelHashMap<Entity, PassState> m_Passes;
+        private NativeParallelHashMap<Entity, LitState> m_Lit;
         private uint m_LastLog;
         private uint m_LastSweep;
 
@@ -570,11 +648,12 @@ namespace EmergencyPriority
             m_Sim = World.GetOrCreateSystemManaged<SimulationSystem>();
             m_Stats = new NativeArray<int>(kStatCount, Allocator.Persistent);
             m_Passes = new NativeParallelHashMap<Entity, PassState>(64, Allocator.Persistent);
+            m_Lit = new NativeParallelHashMap<Entity, LitState>(64, Allocator.Persistent);
             m_CarQuery = GetEntityQuery(new EntityQueryDesc
             {
                 All = new[]
                 {
-                    ComponentType.ReadOnly<Car>(),
+                    ComponentType.ReadWrite<Car>(),
                     ComponentType.ReadOnly<Game.Objects.Transform>(),
                     ComponentType.ReadOnly<Moving>(),
                     ComponentType.ReadOnly<PrefabRef>(),
@@ -602,6 +681,8 @@ namespace EmergencyPriority
                 m_Stats.Dispose();
             if (m_Passes.IsCreated)
                 m_Passes.Dispose();
+            if (m_Lit.IsCreated)
+                m_Lit.Dispose();
             base.OnDestroy();
         }
 
@@ -622,7 +703,7 @@ namespace EmergencyPriority
             GhostJob job = new GhostJob
             {
                 m_EntityType = GetEntityTypeHandle(),
-                m_CarType = GetComponentTypeHandle<Car>(isReadOnly: true),
+                m_CarType = GetComponentTypeHandle<Car>(isReadOnly: false),
                 m_TransformType = GetComponentTypeHandle<Game.Objects.Transform>(isReadOnly: true),
                 m_MovingType = GetComponentTypeHandle<Moving>(isReadOnly: true),
                 m_PrefabRefType = GetComponentTypeHandle<PrefabRef>(isReadOnly: true),
@@ -644,10 +725,14 @@ namespace EmergencyPriority
                 m_PrefabObjectGeometryData = GetComponentLookup<ObjectGeometryData>(isReadOnly: true),
                 m_LaneObjects = GetBufferLookup<LaneObject>(isReadOnly: true),
                 m_SubLanes = GetBufferLookup<Game.Net.SubLane>(isReadOnly: true),
+                m_AmbulanceData = GetComponentLookup<Game.Vehicles.Ambulance>(isReadOnly: true),
                 m_Passes = m_Passes,
+                m_Lit = m_Lit,
                 m_GhostSpeed = math.clamp(s.GhostCrawlSpeed, 0.5f, kMaxGhostSpeed),
                 m_PullOver = s.TrafficPullsOver,
                 m_UseFreeLane = s.GhostUsesFreeLane,
+                m_LightsInTraffic = s.LightsInTraffic,
+                m_Frame = frame,
                 m_Stats = m_Stats,
             };
             // Single-threaded on purpose: the bucket is small, m_Stats is a plain counter and m_Passes a plain map.
@@ -667,15 +752,25 @@ namespace EmergencyPriority
                         m_Passes.Remove(e);
                 }
                 keys.Dispose();
+                // Lit ambulances whose entity is gone, or all of them if the option was switched off (the AI restores
+                // the flag on its next path; until then they simply stay lit).
+                keys = m_Lit.GetKeyArray(Allocator.Temp);
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    if (!s.LightsInTraffic || !EntityManager.Exists(keys[i]))
+                        m_Lit.Remove(keys[i]);
+                }
+                keys.Dispose();
             }
 
             if (frame - m_LastLog >= 16384)
             {
                 m_LastLog = frame;
                 Dependency.Complete();
-                Mod.log.Info($"[SelfTest] ghost status: enabled={s.Enabled} ghost={s.GhostThroughJams} pullOver={s.TrafficPullsOver} freeLane={s.GhostUsesFreeLane} speed={job.m_GhostSpeed:0.0}m/s"
+                Mod.log.Info($"[SelfTest] ghost status: enabled={s.Enabled} ghost={s.GhostThroughJams} pullOver={s.TrafficPullsOver} freeLane={s.GhostUsesFreeLane} lights={s.LightsInTraffic} speed={job.m_GhostSpeed:0.0}m/s"
                     + $" pushed={m_Stats[kPushed]} pushedCrossing={m_Stats[kPushedCrossing]} retargeted={m_Stats[kRetargeted]} pulledOver={m_Stats[kPulledOver]}"
                     + $" passes={m_Stats[kPassStarted]} returns={m_Stats[kPassReturned]} passesLive={m_Passes.Count()}"
+                    + $" litUp={m_Stats[kLitUp]} litOff={m_Stats[kLitOff]} litLive={m_Lit.Count()}"
                     + $" skipped: noBlocker={m_Stats[kSkipNoBlocker]} crossingMoving={m_Stats[kSkipCrossing]}"
                     + $" oncoming={m_Stats[kSkipOncoming]} otherType={m_Stats[kSkipOtherType]} notCar={m_Stats[kSkipNotCar]}"
                     + $" notDriving={m_Stats[kSkipNotDriving]} reversing={m_Stats[kSkipReversing]}");
