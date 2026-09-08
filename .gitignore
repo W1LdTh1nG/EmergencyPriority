@@ -7,3 +7,4 @@ UI/build/
 *.log
 DISPATCH.md
 tools/uitest/*.png
+.vs/

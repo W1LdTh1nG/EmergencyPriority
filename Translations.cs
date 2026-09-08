@@ -24,8 +24,17 @@ namespace EmergencyPriority
             { "opt.GreenLightPriority.D", "Traffic lights on a responding vehicle's route turn green as it approaches, and stay green until it has passed. This clears the queue of cars in front of it — emergency vehicles already ignore red lights themselves, it is the traffic ahead of them that waits. Uses the game's own signal priority, so normal light phases and pedestrian crossings are still respected." },
             { "opt.GreenLightDistance.L", "Green light distance (metres)" },
             { "opt.GreenLightDistance.D", "How far ahead of a responding vehicle the traffic lights react. A light needs a few seconds to change safely, so a longer distance makes it more likely to already be green on arrival. Shorter distances hold fewer junctions open at once." },
+            { "opt.GhostThroughJams.L", "Creep through stopped traffic" },
+            { "opt.GhostThroughJams.D", "A responder boxed in by stopped cars in its own lane creeps forward through the car in front at walking pace, as if the queue had pulled aside. Only applies to stopped vehicles: the car directly ahead, or stopped cross traffic in a gridlocked junction or roundabout. Never moving cross traffic, pedestrians or signals. The game has no vehicle collisions, so the brief overlap is harmless." },
+            { "opt.GhostCrawlSpeed.L", "Speed through parted traffic (m/s)" },
+            { "opt.GhostCrawlSpeed.D", "How fast a responder moves while passing through stopped or pulled-over traffic. 6 m/s is about 22 km/h; 3 m/s is the speed the game itself uses when it lets a vehicle drive through a blocker." },
+            { "opt.TrafficPullsOver.L", "Slow traffic pulls over" },
+            { "opt.TrafficPullsOver.D", "In slow-moving traffic, the car directly ahead of a responding vehicle in the same lane brakes to a stop as if it had pulled aside, and the responder passes through it — car after car, to the head of the queue. Off = the responder only passes through cars that have already stopped." },
+            { "opt.GhostUsesFreeLane.L", "Use a free lane to pass the queue" },
+            { "opt.GhostUsesFreeLane.D", "A responder queued behind traffic moves into an empty neighbouring lane, passes the queue there, and cuts back into its own lane just before the junction — even if that lane is for a different turn. Works on either side, for left- or right-hand traffic." },
             { "grp.Group", "Responding vehicles" },
             { "grp.GroupLights", "Traffic lights" },
+            { "grp.GroupGhost", "Stopped traffic" },
             { "grp.GroupGeneral", "General" },
         };
 

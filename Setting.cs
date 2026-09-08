@@ -14,6 +14,7 @@ namespace EmergencyPriority
         public const string Section = "Main";
         public const string Group = "Emergency";
         public const string GroupLights = "Lights";
+        public const string GroupGhost = "Ghost";
         public const string GroupGeneral = "General";
 
         public EmergencyPrioritySetting(IMod mod) : base(mod) { }
@@ -51,6 +52,29 @@ namespace EmergencyPriority
         [SettingsUISection(Section, GroupLights)]
         public int GreenLightDistance { get; set; } = 120;
 
+        // A responder boxed in by STOPPED traffic in its own lane creeps through the car in front at walking pace,
+        // as if the queue had pulled aside. Only same-lane vehicle blockers; never cross traffic, pedestrians or
+        // signals. See EmergencyGhostSystem.
+        [SettingsUISection(Section, GroupGhost)]
+        public bool GhostThroughJams { get; set; } = true;
+
+        // Speed while passing through, in m/s. Above ~3.5 m/s EmergencyGhostSystem also has to move the nav target
+        // itself (the nav job only looks ~1 m ahead for a blocked car); 3 m/s is vanilla's own drive-through floor.
+        [SettingsUISlider(min = 1f, max = 10f, step = 0.5f, unit = "floatSingleFraction")]
+        [SettingsUISection(Section, GroupGhost)]
+        public float GhostCrawlSpeed { get; set; } = 6f;
+
+        // In slow traffic, the car directly ahead of a responder in the same lane brakes to a stop as if it had
+        // pulled aside, so the responder passes car after car to the head of the queue. See EmergencyGhostSystem.
+        [SettingsUISection(Section, GroupGhost)]
+        public bool TrafficPullsOver { get; set; } = true;
+
+        // A responder queued behind traffic moves into an empty neighbouring lane (either side — works for left or
+        // right turns and for left- or right-hand traffic), passes the queue there, and cuts back into its own lane
+        // just before the junction. See EmergencyGhostSystem.
+        [SettingsUISection(Section, GroupGhost)]
+        public bool GhostUsesFreeLane { get; set; } = true;
+
         public override void SetDefaults()
         {
             Enabled = true;
@@ -59,6 +83,10 @@ namespace EmergencyPriority
             RerouteAfterSeconds = 5;
             GreenLightPriority = true;
             GreenLightDistance = 120;
+            GhostThroughJams = true;
+            GhostCrawlSpeed = 6f;
+            TrafficPullsOver = true;
+            GhostUsesFreeLane = true;
         }
     }
 }

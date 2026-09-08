@@ -34,7 +34,12 @@ namespace EmergencyPriority
             // matching update interval in GreenLightPrioritySystem.
             updateSystem.UpdateBefore<GreenLightPrioritySystem, TrafficLightSystem>(SystemUpdatePhase.GameSimulation);
 
-            log.Info("[SelfTest] EmergencyPriority loaded (despawn guard + auto re-route + green-light priority).");
+            // Immediately after the nav job (and its Actions flush) so we overwrite CarNavigation.m_MaxSpeed after it
+            // is computed and before CarMoveSystem consumes it; the vehicle AI systems sit in between in vanilla's
+            // list and do not touch it. See EmergencyGhostSystem for why this is the one writable seam.
+            updateSystem.UpdateAfter<EmergencyGhostSystem, CarNavigationSystem.Actions>(SystemUpdatePhase.GameSimulation);
+
+            log.Info("[SelfTest] EmergencyPriority loaded (despawn guard + auto re-route + green-light priority + ghost-through-jams).");
         }
 
         public void OnDispose()
@@ -77,6 +82,16 @@ namespace EmergencyPriority
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GreenLightPriority)), T("opt.GreenLightPriority.D") },
                 { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GreenLightDistance)), T("opt.GreenLightDistance.L") },
                 { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GreenLightDistance)), T("opt.GreenLightDistance.D") },
+
+                { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.GroupGhost), T("grp.GroupGhost") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GhostThroughJams)), T("opt.GhostThroughJams.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GhostThroughJams)), T("opt.GhostThroughJams.D") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GhostCrawlSpeed)), T("opt.GhostCrawlSpeed.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GhostCrawlSpeed)), T("opt.GhostCrawlSpeed.D") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.TrafficPullsOver)), T("opt.TrafficPullsOver.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.TrafficPullsOver)), T("opt.TrafficPullsOver.D") },
+                { m_S.GetOptionLabelLocaleID(nameof(EmergencyPrioritySetting.GhostUsesFreeLane)), T("opt.GhostUsesFreeLane.L") },
+                { m_S.GetOptionDescLocaleID(nameof(EmergencyPrioritySetting.GhostUsesFreeLane)), T("opt.GhostUsesFreeLane.D") },
 
                 { m_S.GetOptionGroupLocaleID(EmergencyPrioritySetting.GroupGeneral), T("grp.GroupGeneral") },
             };
