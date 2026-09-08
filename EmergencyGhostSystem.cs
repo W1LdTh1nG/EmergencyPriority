@@ -148,6 +148,20 @@ namespace EmergencyPriority
         private const float kLightsOffSpeed = 6f;
         private const uint kLightsOffDelayFrames = 300;
 
+        // Re-target only when the new point is within ~35° of the vehicle's heading (cos 35° ≈ 0.82). A target more
+        // than 1 m away AND more than 45° off heading makes a STOPPED vehicle's nav job decide to reverse to realign
+        // (CarNavigationSystem.cs:2002-2013); with a blocker ahead its allowed speed is 0, so it "reverses" at zero
+        // speed for ever. Vanilla's own 1 m target can never trip that; a pushed-out one can. Seen in play as an
+        // angled ambulance sitting behind a pulled-over truck with `reversing` ticking up in the log.
+        private const float kRetargetMinHeading = 0.82f;
+
+        // Watchdog. A responder that has not moved kStallMove in kStallFrames while we are assisting it gets
+        // kHandsOffFrames of nothing from us (no push, no pull-over on its behalf, any pass abandoned and unpinned)
+        // so the vanilla nav can untangle whatever we got it into; then we resume. Lights are left alone.
+        private const float kStallMove = 0.5f;
+        private const uint kStallFrames = 300;
+        private const uint kHandsOffFrames = 300;
+
         // Lane states in which a vehicle is not "driving down a road" — parked, arrived, at a building door, on a
         // connection lane, in a parking area — and must not be pushed or stopped. EndOfPath/ParkingSpace are the
         // same guard the green-light system uses (CarFlags.Emergency is NOT cleared on arrival); the rest are lane
@@ -174,12 +188,22 @@ namespace EmergencyPriority
         private const int kPassReturned = 12;   // ... and returns into the home lane begun
         private const int kLitUp = 13;          // transporting ambulances given lights for a jam
         private const int kLitOff = 14;         // ... and lights taken away again once clear
-        private const int kStatCount = 15;
+        private const int kStalls = 15;         // watchdog trips (5 s without movement -> 5 s hands-off)
+        private const int kForcedForward = 16;  // nav wanted to reverse behind a stopped car; pushed forward instead
+        private const int kStatCount = 17;
 
         // An ambulance we lit up, keyed by entity: when it was last held up by traffic.
         public struct LitState
         {
             public uint m_LastBlockedFrame;
+        }
+
+        // Watchdog state per responder: where it last made progress, and until when we are keeping our hands off.
+        public struct StallState
+        {
+            public float3 m_LastPosition;
+            public uint m_LastMoveFrame;
+            public uint m_HandsOffUntil;
         }
 
         // One free-lane pass in progress, keyed by responder. Removed when the responder is back in its home lane,
@@ -223,6 +247,7 @@ namespace EmergencyPriority
 
             public NativeParallelHashMap<Entity, PassState> m_Passes;
             public NativeParallelHashMap<Entity, LitState> m_Lit;
+            public NativeParallelHashMap<Entity, StallState> m_Stalls;
 
             public float m_GhostSpeed;
             public bool m_PullOver;
@@ -249,13 +274,12 @@ namespace EmergencyPriority
                 {
                     CarNavigation navigation = navigations[i];
 
-                    // Sign bit set = the nav job wants the vehicle to reverse. Not our business either way.
-                    if ((math.asuint(navigation.m_MaxSpeed) >> 31) != 0)
-                    {
-                        if ((cars[i].m_Flags & CarFlags.Emergency) != 0)
-                            m_Stats[kSkipReversing]++;
+                    // Sign bit set = the nav job wants the vehicle to reverse. For a civilian that is none of our
+                    // business. For a responder it is checked again below: boxed in by a stopped car it is pushed
+                    // forward instead, otherwise left alone.
+                    bool wantsReverse = (math.asuint(navigation.m_MaxSpeed) >> 31) != 0;
+                    if (wantsReverse && (cars[i].m_Flags & CarFlags.Emergency) == 0)
                         continue;
-                    }
 
                     CarCurrentLane lane = lanes[i];
                     bool driving = navLanes[i].Length != 0 && (lane.m_LaneFlags & kNotDrivingFlags) == 0;
@@ -330,6 +354,13 @@ namespace EmergencyPriority
                         }
                     }
 
+                    // Watchdog: hands off a responder that has stopped making progress despite our help.
+                    if (HandsOff(entities[i], transforms[i].m_Position, driving, ref lane))
+                    {
+                        lanes[i] = lane;
+                        continue;
+                    }
+
                     // Free-lane pass bookkeeping runs every tick for a responder with a pass in progress, and may
                     // start one for a responder queued behind a same-lane blocker.
                     if (UpdatePass(entities[i], cars[i], driving, navigation, blocker, ref lane))
@@ -380,6 +411,15 @@ namespace EmergencyPriority
                         continue;
                     }
 
+                    // Nav wanted to back up to realign, but there is a stopped car in front and it is a responder:
+                    // go forward through it instead. (A reversing responder with a MOVING blocker was skipped above
+                    // via the crossing test or is about to be left alone by the ghost-speed test.)
+                    if (wantsReverse)
+                    {
+                        navigation.m_MaxSpeed = 0f;
+                        m_Stats[kForcedForward]++;
+                    }
+
                     // Ramp up at the vehicle's own acceleration so a stopped responder eases into the pass.
                     float currentSpeed = math.length(movings[i].m_Velocity);
                     CarData prefabCar = m_PrefabCarData[prefabRefs[i].m_Prefab];
@@ -393,7 +433,8 @@ namespace EmergencyPriority
                     float need = desired * kTimeStep + kTargetMargin;
                     bool retargeted = false;
                     if (distance < need && lane.m_ChangeLane == Entity.Null)
-                        retargeted = AdvanceTarget(ref navigation, ref lane, prefabRefs[i], position, need, ref distance);
+                        retargeted = AdvanceTarget(ref navigation, ref lane, prefabRefs[i], position,
+                            math.forward(transforms[i].m_Rotation), need, ref distance);
 
                     float target = math.min(desired, distance / kTimeStep);
                     if (target <= navigation.m_MaxSpeed)
@@ -415,6 +456,45 @@ namespace EmergencyPriority
                     blockers[i] = blocker;
                     m_Stats[crossing ? kPushedCrossing : kPushed]++;
                 }
+            }
+
+            // Watchdog for one responder. Returns true while we should keep our hands off it. Abandons and unpins any
+            // pass when it trips, so vanilla's lane selection is free again.
+            private bool HandsOff(Entity entity, float3 position, bool driving, ref CarCurrentLane lane)
+            {
+                if (!driving)
+                {
+                    m_Stalls.Remove(entity);
+                    return false;
+                }
+                if (!m_Stalls.TryGetValue(entity, out StallState stall))
+                    stall = new StallState { m_LastPosition = position, m_LastMoveFrame = m_Frame };
+                if (math.distancesq(position, stall.m_LastPosition) > kStallMove * kStallMove)
+                {
+                    stall.m_LastPosition = position;
+                    stall.m_LastMoveFrame = m_Frame;
+                }
+                bool handsOff = m_Frame < stall.m_HandsOffUntil;
+                if (!handsOff && m_Frame - stall.m_LastMoveFrame >= kStallFrames)
+                {
+                    stall.m_HandsOffUntil = m_Frame + kHandsOffFrames;
+                    stall.m_LastMoveFrame = m_Frame;
+                    handsOff = true;
+                    m_Stats[kStalls]++;
+                    if (m_Passes.TryGetValue(entity, out PassState pass))
+                    {
+                        StartLaneChange(ref lane, pass.m_HomeLane);
+                        lane.m_LaneFlags &= ~CarLaneFlags.FixedLane;
+                        m_Passes.Remove(entity);
+                    }
+                }
+                m_Stalls[entity] = stall;
+                return handsOff;
+            }
+
+            private bool IsHandsOff(Entity entity)
+            {
+                return m_Stalls.TryGetValue(entity, out StallState stall) && m_Frame < stall.m_HandsOffUntil;
             }
 
             // Free-lane pass state machine for one responder. Returns true if CarCurrentLane was changed.
@@ -574,7 +654,7 @@ namespace EmergencyPriority
             // Mirrors MoveTarget (CarNavigationSystem.cs:2501-2530): m_CurvePosition.x is the curve parameter of the
             // target, .z the lane exit, and the lateral offset comes from GetLaneOffset/GetLanePosition with the
             // vehicle's own lane position (sign-flipped on a lane traversed backwards, :1859).
-            private bool AdvanceTarget(ref CarNavigation navigation, ref CarCurrentLane lane, PrefabRef prefabRef, float3 position, float need, ref float distance)
+            private bool AdvanceTarget(ref CarNavigation navigation, ref CarCurrentLane lane, PrefabRef prefabRef, float3 position, float3 heading, float need, ref float distance)
             {
                 if (!m_CurveData.TryGetComponent(lane.m_Lane, out Curve curve) || curve.m_Length < 0.01f
                     || !m_PrefabRefData.TryGetComponent(lane.m_Lane, out PrefabRef lanePrefabRef)
@@ -598,6 +678,11 @@ namespace EmergencyPriority
                 float3 newTarget = VehicleUtils.GetLanePosition(curve.m_Bezier, t, laneOffset);
                 float newDistance = math.distance(position, newTarget);
                 if (newDistance <= distance)
+                    return false;
+
+                // Off-heading target: keep vanilla's 1 m target and let the vehicle creep and straighten first
+                // (see kRetargetMinHeading).
+                if (math.dot(heading, math.normalizesafe(newTarget - position)) < kRetargetMinHeading)
                     return false;
 
                 navigation.m_TargetPosition = newTarget;
@@ -627,7 +712,7 @@ namespace EmergencyPriority
                         || (other.m_Flags & CarFlags.Emergency) == 0)
                         continue;
                     float span = forward ? myX - laneObject.m_CurvePosition.x : laneObject.m_CurvePosition.x - myX;
-                    if (span > 0f && span <= maxSpan)
+                    if (span > 0f && span <= maxSpan && !IsHandsOff(laneObject.m_LaneObject))
                         return true;
                 }
                 return false;
@@ -639,6 +724,7 @@ namespace EmergencyPriority
         private NativeArray<int> m_Stats;
         private NativeParallelHashMap<Entity, PassState> m_Passes;
         private NativeParallelHashMap<Entity, LitState> m_Lit;
+        private NativeParallelHashMap<Entity, StallState> m_Stalls;
         private uint m_LastLog;
         private uint m_LastSweep;
 
@@ -649,6 +735,7 @@ namespace EmergencyPriority
             m_Stats = new NativeArray<int>(kStatCount, Allocator.Persistent);
             m_Passes = new NativeParallelHashMap<Entity, PassState>(64, Allocator.Persistent);
             m_Lit = new NativeParallelHashMap<Entity, LitState>(64, Allocator.Persistent);
+            m_Stalls = new NativeParallelHashMap<Entity, StallState>(64, Allocator.Persistent);
             m_CarQuery = GetEntityQuery(new EntityQueryDesc
             {
                 All = new[]
@@ -683,6 +770,8 @@ namespace EmergencyPriority
                 m_Passes.Dispose();
             if (m_Lit.IsCreated)
                 m_Lit.Dispose();
+            if (m_Stalls.IsCreated)
+                m_Stalls.Dispose();
             base.OnDestroy();
         }
 
@@ -728,6 +817,7 @@ namespace EmergencyPriority
                 m_AmbulanceData = GetComponentLookup<Game.Vehicles.Ambulance>(isReadOnly: true),
                 m_Passes = m_Passes,
                 m_Lit = m_Lit,
+                m_Stalls = m_Stalls,
                 m_GhostSpeed = math.clamp(s.GhostCrawlSpeed, 0.5f, kMaxGhostSpeed),
                 m_PullOver = s.TrafficPullsOver,
                 m_UseFreeLane = s.GhostUsesFreeLane,
@@ -761,6 +851,15 @@ namespace EmergencyPriority
                         m_Lit.Remove(keys[i]);
                 }
                 keys.Dispose();
+                keys = m_Stalls.GetKeyArray(Allocator.Temp);
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    Entity e = keys[i];
+                    if (!EntityManager.Exists(e) || !EntityManager.HasComponent<Car>(e)
+                        || (EntityManager.GetComponentData<Car>(e).m_Flags & CarFlags.Emergency) == 0)
+                        m_Stalls.Remove(e);
+                }
+                keys.Dispose();
             }
 
             if (frame - m_LastLog >= 16384)
@@ -771,6 +870,7 @@ namespace EmergencyPriority
                     + $" pushed={m_Stats[kPushed]} pushedCrossing={m_Stats[kPushedCrossing]} retargeted={m_Stats[kRetargeted]} pulledOver={m_Stats[kPulledOver]}"
                     + $" passes={m_Stats[kPassStarted]} returns={m_Stats[kPassReturned]} passesLive={m_Passes.Count()}"
                     + $" litUp={m_Stats[kLitUp]} litOff={m_Stats[kLitOff]} litLive={m_Lit.Count()}"
+                    + $" stalls={m_Stats[kStalls]} forcedForward={m_Stats[kForcedForward]}"
                     + $" skipped: noBlocker={m_Stats[kSkipNoBlocker]} crossingMoving={m_Stats[kSkipCrossing]}"
                     + $" oncoming={m_Stats[kSkipOncoming]} otherType={m_Stats[kSkipOtherType]} notCar={m_Stats[kSkipNotCar]}"
                     + $" notDriving={m_Stats[kSkipNotDriving]} reversing={m_Stats[kSkipReversing]}");
