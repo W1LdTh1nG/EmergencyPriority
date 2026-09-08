@@ -120,6 +120,10 @@ namespace EmergencyPriority
                     continue;
                 }
 
+                // A responder the ghost watchdog has given up on is not coming: stop holding the lights for it.
+                if (EmergencyGhostSystem.GivenUp.Contains(e))
+                    continue;
+
                 CarCurrentLane current = EntityManager.GetComponentData<CarCurrentLane>(e);
                 DynamicBuffer<CarNavigationLane> lanes = EntityManager.GetBuffer<CarNavigationLane>(e, isReadOnly: true);
 
