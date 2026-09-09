@@ -884,6 +884,8 @@ namespace EmergencyPriority
         }
 
         private EntityQuery m_CarQuery;
+        private EntityQuery m_SittingQuery;
+        private uint m_LastSittingReport;
         private SimulationSystem m_Sim;
         private EndFrameBarrier m_EndFrameBarrier;
         private NativeArray<int> m_Stats;
@@ -929,6 +931,27 @@ namespace EmergencyPriority
                 },
             });
             RequireForUpdate(m_CarQuery);
+            // Diagnostic only: every siren-on car, whether or not it still has Moving (the game removes it when it
+            // parks a vehicle in place — AmbulanceAISystem.StopVehicle — and such a vehicle is invisible to the job).
+            m_SittingQuery = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[]
+                {
+                    ComponentType.ReadOnly<Car>(),
+                    ComponentType.ReadOnly<Game.Objects.Transform>(),
+                    ComponentType.ReadOnly<CarCurrentLane>(),
+                    ComponentType.ReadOnly<CarNavigation>(),
+                    ComponentType.ReadOnly<CarNavigationLane>(),
+                    ComponentType.ReadOnly<Blocker>(),
+                    ComponentType.ReadOnly<PathOwner>(),
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Deleted>(),
+                    ComponentType.ReadOnly<Temp>(),
+                    ComponentType.ReadOnly<ParkedCar>(),
+                },
+            });
         }
 
         protected override void OnDestroy()
@@ -974,6 +997,38 @@ namespace EmergencyPriority
                         + $" path=0x{r.m_PathState:X} navSpeed={r.m_NavSpeed:0.00} speed={r.m_Speed:0.00} reverse={r.m_WantsReverse}"
                         + $" blocker={r.m_Blocker.Index} type={(BlockerType)r.m_BlockerType} byte={r.m_BlockerByte} isCar={r.m_BlockerIsCar} blockerSpeed={r.m_BlockerSpeed:0.00}"
                         + $" pass={r.m_Pass} lit={r.m_Lit}");
+                }
+                // Sitting-responder report: every 15 s, one line per siren-on car that is not moving, including
+                // the ones the job cannot see (no Moving component).
+                if (frame - m_LastSittingReport >= 900)
+                {
+                    m_LastSittingReport = frame;
+                    NativeArray<Entity> sitting = m_SittingQuery.ToEntityArray(Allocator.Temp);
+                    for (int i = 0; i < sitting.Length; i++)
+                    {
+                        Entity e = sitting[i];
+                        Car car = EntityManager.GetComponentData<Car>(e);
+                        if ((car.m_Flags & CarFlags.Emergency) == 0)
+                            continue;
+                        bool hasMoving = EntityManager.HasComponent<Moving>(e);
+                        float speed = hasMoving ? math.length(EntityManager.GetComponentData<Moving>(e).m_Velocity) : 0f;
+                        if (hasMoving && speed > 0.1f)
+                            continue;
+                        Game.Objects.Transform t = EntityManager.GetComponentData<Game.Objects.Transform>(e);
+                        CarCurrentLane cl = EntityManager.GetComponentData<CarCurrentLane>(e);
+                        CarNavigation nav = EntityManager.GetComponentData<CarNavigation>(e);
+                        Blocker bl = EntityManager.GetComponentData<Blocker>(e);
+                        PathOwner po = EntityManager.GetComponentData<PathOwner>(e);
+                        int navLen = EntityManager.GetBuffer<CarNavigationLane>(e, isReadOnly: true).Length;
+                        int amb = EntityManager.HasComponent<Game.Vehicles.Ambulance>(e) ? (int)EntityManager.GetComponentData<Game.Vehicles.Ambulance>(e).m_State : -1;
+                        bool stopped = EntityManager.HasComponent<Game.Objects.Stopped>(e);
+                        uint stalledFor = m_Stalls.TryGetValue(e, out StallState ss) ? frame - ss.m_LastMoveFrame : 0;
+                        Mod.log.Info($"[Sitting] vehicle={e.Index}:{e.Version} at=({t.m_Position.x:0},{t.m_Position.z:0}) moving={hasMoving} stopped={stopped} speed={speed:0.00}"
+                            + $" carFlags=0x{(uint)car.m_Flags:X} ambulance={amb} lane={cl.m_Lane.Index} laneFlags=0x{(uint)cl.m_LaneFlags:X} changing={cl.m_ChangeLane != Entity.Null}"
+                            + $" navLen={navLen} path=0x{(ushort)po.m_State:X} navSpeed={nav.m_MaxSpeed:0.00} blocker={bl.m_Blocker.Index} type={bl.m_Type} byte={bl.m_MaxSpeed}"
+                            + $" stalledFrames={stalledFor} givenUp={GivenUp.Contains(e)}");
+                    }
+                    sitting.Dispose();
                 }
                 GivenUp.Clear();
                 if (m_Stalls.Count() != 0)

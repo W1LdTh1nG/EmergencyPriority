@@ -121,7 +121,7 @@ namespace EmergencyPriority
                 }
 
                 // A responder the ghost watchdog has given up on is not coming: stop holding the lights for it.
-                if (EmergencyGhostSystem.GivenUp.Contains(e))
+                if (EmergencyGhostSystem.GivenUp.Contains(e) || EntityManager.HasComponent<Game.Objects.Stopped>(e))
                     continue;
 
                 CarCurrentLane current = EntityManager.GetComponentData<CarCurrentLane>(e);
