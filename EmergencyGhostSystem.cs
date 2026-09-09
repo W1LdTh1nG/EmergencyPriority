@@ -225,6 +225,34 @@ namespace EmergencyPriority
             public bool m_GaveUp;
         }
 
+        // One line in the log per watchdog trip: everything the job saw for that vehicle at that moment, plus where
+        // it was. The first thing to read when a responder sits somewhere it should not.
+        public struct StallReport
+        {
+            public Entity m_Entity;
+            public uint m_Frame;
+            public int m_Stage;
+            public float3 m_Position;
+            public uint m_CarFlags;
+            public uint m_LaneFlags;
+            public Entity m_Lane;
+            public bool m_Changing;
+            public float m_NavSpeed;
+            public float m_Speed;
+            public bool m_WantsReverse;
+            public bool m_Driving;
+            public bool m_EnRoute;
+            public Entity m_Blocker;
+            public byte m_BlockerType;
+            public byte m_BlockerByte;
+            public bool m_BlockerIsCar;
+            public float m_BlockerSpeed;   // -1 = no Moving component
+            public bool m_Pass;
+            public bool m_Lit;
+            public int m_AmbulanceState;   // -1 = not an ambulance
+            public ushort m_PathState;
+        }
+
         // Responders stage 2 has given up on, for the main-thread walks (green wave, junction clearing) to skip.
         // Refreshed from the job's map every few frames; read-only for everyone else.
         public static readonly System.Collections.Generic.HashSet<Entity> GivenUp = new System.Collections.Generic.HashSet<Entity>();
@@ -277,6 +305,7 @@ namespace EmergencyPriority
             public NativeParallelHashMap<Entity, PassState> m_Passes;
             public NativeParallelHashMap<Entity, LitState> m_Lit;
             public NativeParallelHashMap<Entity, StallState> m_Stalls;
+            public NativeQueue<StallReport> m_Reports;
 
             public float m_GhostSpeed;
             public bool m_PullOver;
@@ -390,7 +419,38 @@ namespace EmergencyPriority
                     bool enRoute = navLanes[i].Length != 0
                         && (lane.m_LaneFlags & (CarLaneFlags.EndOfPath | CarLaneFlags.EndReached | CarLaneFlags.ParkingSpace)) == 0;
                     PathOwner pathOwner = pathOwners[i];
-                    int verdict = Watchdog(entities[i], transforms[i].m_Position, enRoute, ref lane, ref pathOwner);
+                    int verdict = Watchdog(entities[i], transforms[i].m_Position, enRoute, ref lane, ref pathOwner, out int trippedStage);
+                    if (trippedStage != 0)
+                    {
+                        Entity blockerVehicleForReport = blocker.m_Blocker;
+                        if (m_ControllerData.TryGetComponent(blockerVehicleForReport, out Controller reportController))
+                            blockerVehicleForReport = reportController.m_Controller;
+                        m_Reports.Enqueue(new StallReport
+                        {
+                            m_Entity = entities[i],
+                            m_Frame = m_Frame,
+                            m_Stage = trippedStage,
+                            m_Position = transforms[i].m_Position,
+                            m_CarFlags = (uint)cars[i].m_Flags,
+                            m_LaneFlags = (uint)lane.m_LaneFlags,
+                            m_Lane = lane.m_Lane,
+                            m_Changing = lane.m_ChangeLane != Entity.Null,
+                            m_NavSpeed = navigation.m_MaxSpeed,
+                            m_Speed = math.length(movings[i].m_Velocity),
+                            m_WantsReverse = wantsReverse,
+                            m_Driving = driving,
+                            m_EnRoute = enRoute,
+                            m_Blocker = blocker.m_Blocker,
+                            m_BlockerType = (byte)blocker.m_Type,
+                            m_BlockerByte = blocker.m_MaxSpeed,
+                            m_BlockerIsCar = m_CarData.HasComponent(blockerVehicleForReport),
+                            m_BlockerSpeed = m_MovingData.TryGetComponent(blockerVehicleForReport, out Moving reportMoving) ? math.length(reportMoving.m_Velocity) : -1f,
+                            m_Pass = m_Passes.ContainsKey(entities[i]),
+                            m_Lit = m_Lit.ContainsKey(entities[i]),
+                            m_AmbulanceState = m_AmbulanceData.TryGetComponent(entities[i], out Game.Vehicles.Ambulance reportAmbulance) ? (int)reportAmbulance.m_State : -1,
+                            m_PathState = (ushort)pathOwner.m_State,
+                        });
+                    }
                     if (verdict != 0)
                     {
                         lanes[i] = lane;
@@ -499,8 +559,9 @@ namespace EmergencyPriority
 
             // Watchdog for one responder. Returns 0 = assist as normal, 1 = hands off this tick, 2 = despawn it.
             // Abandons and unpins any pass whenever it trips, so vanilla's lane selection is free again.
-            private int Watchdog(Entity entity, float3 position, bool enRoute, ref CarCurrentLane lane, ref PathOwner pathOwner)
+            private int Watchdog(Entity entity, float3 position, bool enRoute, ref CarCurrentLane lane, ref PathOwner pathOwner, out int trippedStage)
             {
+                trippedStage = 0;
                 if (!enRoute)
                 {
                     m_Stalls.Remove(entity);
@@ -537,6 +598,7 @@ namespace EmergencyPriority
                     if ((pathOwner.m_State & (PathFlags.Pending | PathFlags.Failed | PathFlags.Obsolete)) == 0)
                         pathOwner.m_State |= PathFlags.Obsolete;
                     tripped = true;
+                    trippedStage = 2;
                     m_Stats[kGaveUp]++;
                 }
                 // Stage 1: short hands-off, alternating with assistance while the stall lasts.
@@ -546,6 +608,7 @@ namespace EmergencyPriority
                     stall.m_HandsOffUntil = m_Frame + kHandsOffFrames;
                     stall.m_LastTrip = m_Frame;
                     tripped = true;
+                    trippedStage = 1;
                     m_Stats[kStalls]++;
                 }
 
@@ -804,6 +867,7 @@ namespace EmergencyPriority
         private NativeParallelHashMap<Entity, PassState> m_Passes;
         private NativeParallelHashMap<Entity, LitState> m_Lit;
         private NativeParallelHashMap<Entity, StallState> m_Stalls;
+        private NativeQueue<StallReport> m_Reports;
         private uint m_LastLog;
         private uint m_LastSweep;
 
@@ -816,6 +880,7 @@ namespace EmergencyPriority
             m_Passes = new NativeParallelHashMap<Entity, PassState>(64, Allocator.Persistent);
             m_Lit = new NativeParallelHashMap<Entity, LitState>(64, Allocator.Persistent);
             m_Stalls = new NativeParallelHashMap<Entity, StallState>(64, Allocator.Persistent);
+            m_Reports = new NativeQueue<StallReport>(Allocator.Persistent);
             m_CarQuery = GetEntityQuery(new EntityQueryDesc
             {
                 All = new[]
@@ -853,6 +918,8 @@ namespace EmergencyPriority
                 m_Lit.Dispose();
             if (m_Stalls.IsCreated)
                 m_Stalls.Dispose();
+            if (m_Reports.IsCreated)
+                m_Reports.Dispose();
             GivenUp.Clear();
             base.OnDestroy();
         }
@@ -876,6 +943,15 @@ namespace EmergencyPriority
             if ((frame & 3) == 0)
             {
                 Dependency.Complete();
+                while (m_Reports.TryDequeue(out StallReport r))
+                {
+                    Mod.log.Info($"[Stall] stage={r.m_Stage} frame={r.m_Frame} vehicle={r.m_Entity.Index}:{r.m_Entity.Version}"
+                        + $" at=({r.m_Position.x:0},{r.m_Position.z:0}) carFlags=0x{r.m_CarFlags:X} ambulance={r.m_AmbulanceState}"
+                        + $" lane={r.m_Lane.Index} laneFlags=0x{r.m_LaneFlags:X} changing={r.m_Changing} driving={r.m_Driving} enRoute={r.m_EnRoute}"
+                        + $" path=0x{r.m_PathState:X} navSpeed={r.m_NavSpeed:0.00} speed={r.m_Speed:0.00} reverse={r.m_WantsReverse}"
+                        + $" blocker={r.m_Blocker.Index} type={(BlockerType)r.m_BlockerType} byte={r.m_BlockerByte} isCar={r.m_BlockerIsCar} blockerSpeed={r.m_BlockerSpeed:0.00}"
+                        + $" pass={r.m_Pass} lit={r.m_Lit}");
+                }
                 GivenUp.Clear();
                 if (m_Stalls.Count() != 0)
                 {
@@ -922,6 +998,7 @@ namespace EmergencyPriority
                 m_Passes = m_Passes,
                 m_Lit = m_Lit,
                 m_Stalls = m_Stalls,
+                m_Reports = m_Reports,
                 m_GhostSpeed = math.clamp(s.GhostCrawlSpeed, 0.5f, kMaxGhostSpeed),
                 m_PullOver = s.TrafficPullsOver,
                 m_UseFreeLane = s.GhostUsesFreeLane,
