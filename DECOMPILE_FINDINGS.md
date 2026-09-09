@@ -6,7 +6,7 @@ version constant in `Game.Version` is `1.5.7f1 [6157.21012]`). Decompiled with `
 
 ```
 dotnet tool install -g ilspycmd --version 9.1.0.7988
-ilspycmd -p -o <outdir> -r "D:\Games\XBoxGames\Cities- Skylines II - PC Edition\Content\Cities2_Data\Managed" Game.dll
+ilspycmd -p -o <outdir> -r "<game install>\Cities2_Data\Managed" Game.dll
 ```
 
 Line numbers below refer to that decompile output (`Game.Simulation/*.cs` etc.).
