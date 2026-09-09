@@ -157,3 +157,43 @@ after 5 s; stall 0.5 m / 5 s / 30 s / hands-off 5 s and 60 s.
 
 **Other mods present:** C2VM Traffic Lights Enhancement is installed — first suspect if the green wave misbehaves
 at its junctions.
+
+---
+
+## 9. Fixes from the 2026-09-09 evening session
+
+Pull request is open: `W1LdTh1nG:ghost` → `AmicusDeus:main`. It tracks the branch, so every push to `ghost`
+lands in it. Heads now: `ghost` = `1923ca3` (14 commits on upstream `main`), `local-ghost` = `79bd07b`.
+
+Five fixes, all found from play and confirmed via the mod log rather than guessed:
+
+1. **Pull-over needs a moving responder** (`506cac3`). `CarFlags.Emergency` is not cleared on arrival; a loading
+   ambulance at the kerb held every civilian ahead of it stopped. Pull-over now needs a non-empty nav buffer and
+   a driving lane state — the guard the other features already had.
+2. **Stall report** (`25d8f6f`). One `[Stall]` log line per watchdog trip with everything the job saw (position,
+   flags, path state, nav vs actual speed, reverse request, blocker entity/type/byte/is-car/speed, pass/lit,
+   ambulance state). Diagnose from the log; don't theorise.
+3. **Junction clearing: not in car parks, released at 15 s** (`9fa6bf0`). An ambulance wedged in a car park had its
+   driveway reserved at 108 and every pedestrian on the pavement queued at that crossing in both directions.
+   Junction clearing skips Area/Connection lanes; both walks drop a responder with no progress for 15 s;
+   progress radius 0.5 m → 3 m so a vehicle jiggling between bays counts as stalled.
+4. **Push through the don't-block-the-box rule** (`6312161`). Stall report showed `navSpeed=0, reverse=True,
+   blocker=0, type=Continuing`: `CheckSpace` refusing entry to the next lane (no room beyond) — fails for ever in a
+   car park's short lanes, and nav's reverse-to-realign at zero speed seals it. A "Continuing" limit with no
+   entity is now pushed through; other no-entity limits (reservation yields, barriers, speed limits) still respected.
+   `pushedSpaceRule` counter in the status line (36 in the first hour).
+5. **Stopped responders** (`1923ca3`). The game removes `Moving` when it parks a vehicle in place
+   (`AmbulanceAISystem.StopVehicle` while loading). Such a vehicle is invisible to the ghost job (query requires
+   `Moving`) so the watchdog can never give up on it, while the walks kept reserving for it. Both walks now skip
+   `Game.Objects.Stopped`. Plus a `[Sitting]` line every 15 s per siren-on car that is not moving, including the
+   ones without `Moving` — the report the stall report can't produce.
+
+**Log reading, one hour after the last fix (23:04–00:01):** ~8,400 pushes, 840 through stopped cross traffic, 36
+through the box rule, ~4,000 pull-overs, 71 lights on/off, 6 passes all returned; 3 watchdog trips (all
+reservation yields at junctions, self-cleared within 5 s), 0 give-ups, 0 despawns; 26 upstream reroutes. All
+long `[Sitting]` entries were legitimate: a busy critical-transport ambulance at successive pickups/hospital, and
+two non-ambulance responders parked at their incident with EndOfPath. First boring log of the project.
+
+**Lessons:** the two diagnostics ([Stall], [Sitting]) paid for themselves within an hour — keep them in the
+upstream branch. Every deploy needs the game closed; the log resets on each load, so read it before restarting.
+Entity ids are reassigned on load, so a vehicle can't be tracked across restarts by id — use position.
