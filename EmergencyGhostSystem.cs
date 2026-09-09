@@ -170,7 +170,15 @@ namespace EmergencyPriority
         //  3. StuckDespawnSeconds (setting, 0 = never): despawn it — Deleted, exactly what the vanilla AI does to a
         //     responder it considers stuck (AmbulanceAISystem.cs:234-237) — so the request is served by a fresh
         //     unit instead of sitting behind a vehicle that will never arrive. Lights are left alone throughout.
-        private const float kStallMove = 0.5f;
+        // "Progress" = getting kStallMove away from where it last made progress. 3 m, not 0.5: a vehicle threading
+        // a car park can jiggle half a metre back and forth for ever without going anywhere.
+        private const float kStallMove = 3f;
+
+        // The main-thread walks (green wave, junction clearing) stop holding lights and lanes for a responder that
+        // has made no progress for this long — earlier than the 30 s give-up, because those holds are what jam the
+        // street (and the pavement: pedestrians hold at a reserved crossing) while it sits there. Still long enough
+        // for the normal few-second wait at a roundabout entry while the ring stops for it.
+        private const uint kReleaseWalksFrames = 900;
         private const uint kStallFrames = 300;
         private const uint kHandsOffFrames = 300;
         private const uint kGiveUpFrames = 1800;
@@ -253,8 +261,9 @@ namespace EmergencyPriority
             public ushort m_PathState;
         }
 
-        // Responders stage 2 has given up on, for the main-thread walks (green wave, junction clearing) to skip.
-        // Refreshed from the job's map every few frames; read-only for everyone else.
+        // Responders the main-thread walks (green wave, junction clearing) must skip: no progress for
+        // kReleaseWalksFrames, or given up on (stage 2) and still in its hands-off. Refreshed from the job's map
+        // every few frames; read-only for everyone else.
         public static readonly System.Collections.Generic.HashSet<Entity> GivenUp = new System.Collections.Generic.HashSet<Entity>();
 
         // One free-lane pass in progress, keyed by responder. Removed when the responder is back in its home lane,
@@ -958,7 +967,8 @@ namespace EmergencyPriority
                     NativeKeyValueArrays<Entity, StallState> stalls = m_Stalls.GetKeyValueArrays(Allocator.Temp);
                     for (int i = 0; i < stalls.Length; i++)
                     {
-                        if (stalls.Values[i].m_GaveUp && frame < stalls.Values[i].m_HandsOffUntil)
+                        StallState st = stalls.Values[i];
+                        if ((st.m_GaveUp && frame < st.m_HandsOffUntil) || frame - st.m_LastMoveFrame >= kReleaseWalksFrames)
                             GivenUp.Add(stalls.Keys[i]);
                     }
                     stalls.Dispose();

@@ -103,12 +103,20 @@ namespace EmergencyPriority
                     m_Watched.RemoveAt(i);
                     continue;
                 }
-                // A responder the ghost watchdog has given up on is not coming: stop holding the road for it.
+                // A responder the ghost watchdog has stalled or given up on is not coming: stop holding the road
+                // for it. (Seen in play: an ambulance wedged in a car park, its driveway reserved, and every
+                // pedestrian on the pavement queued at that crossing in both directions.)
                 if (EmergencyGhostSystem.GivenUp.Contains(e))
                     continue;
 
                 CarCurrentLane current = EntityManager.GetComponentData<CarCurrentLane>(e);
                 DynamicBuffer<CarNavigationLane> lanes = EntityManager.GetBuffer<CarNavigationLane>(e, isReadOnly: true);
+
+                // Not while it is still inside a car park or on a building connection: reserving the driveway and
+                // 60 m of street while it threads the bays is premature, and a lot can take a while to cross. It
+                // gets the reservations the moment it is on a road lane.
+                if ((current.m_LaneFlags & (Game.Vehicles.CarLaneFlags.Area | Game.Vehicles.CarLaneFlags.Connection)) != 0)
+                    continue;
 
                 // Same "still navigating" guard as the green-light system: CarFlags.Emergency is NOT cleared on
                 // arrival, and a fire engine parked at a fire must not hold the surrounding junctions for the whole
