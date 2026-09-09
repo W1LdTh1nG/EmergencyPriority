@@ -4,16 +4,16 @@ Responders drive through jams: ghost-through, pull-over, free-lane pass, junctio
 
 # PR description (paste below the title)
 
-Hi — first, thanks for Emergency Priority; the source comments made it possible to build on it instead of starting over. This branch adds the missing half of the problem: your mod fixes *routing and signals*, this adds *driving*. A responder that is boxed in now gets through the traffic instead of waiting for it, and everything is done the same way you did it — pure ECS, writing only fields the game itself writes, no Harmony, nothing in the save, master switch off = exact vanilla.
+Hi — first, thanks for Emergency Priority; the source comments made it possible to build on it instead of starting over. This branch adds the missing half of the problem: your mod fixes *routing and signals*, this adds *driving* (as if vehicles in front of the responder is moving out of the way). A responder that is boxed in now gets through the traffic instead of waiting for it, and everything is done the same way you did it — pure ECS, writing only fields the game itself writes, no Harmony, nothing in the save, master switch off = exact vanilla.
 
 ## What it adds
 
 Two new systems, `EmergencyGhostSystem` (Burst job) and `JunctionClearSystem` (main thread, same shape as `GreenLightPrioritySystem`). Each behaviour has its own toggle.
 
 1. **Drive through stopped traffic.** A responder blocked by a stopped car in its own lane, or by stationary cross traffic in a gridlocked junction/roundabout, drives through it at a configurable speed (1–10 m/s, default 6). Moving cross traffic, pedestrians and signals are never driven through. The game has no collisions between driving vehicles (`ObjectCollisionSystem` only queries `OutOfControl`), so the brief overlap is harmless — and vanilla already does exactly this at 3 m/s for one entity via `CarLaneFlags.IgnoreBlocker`.
-2. **Slow traffic pulls over.** In slow traffic the civilian directly ahead of a responder in the same lane brakes to a stop for it, so the responder passes car after car to the head of the queue.
+2. **Slow traffic pulls over.** In slow traffic the civilian directly ahead of a responder in the same lane brakes to a stop, allowing the responder to pass car after car (as per #1) to the head of the queue.
 3. **Free-lane pass.** A queued responder moves into an empty neighbouring lane (either side; LHT/RHT agnostic), passes the queue there, and cuts back into its home lane 30 m before the junction. Pinned with `CarLaneFlags.FixedLane` so `UpdateOptimalLane` doesn't revert it; the pin dies with the lane, so vanilla is back in charge at the junction.
-4. **Ambulances light up to get through traffic.** A transport without sirens (vanilla only lights a critical patient) gets `CarFlags.Emergency` while traffic holds it, and loses it ~5 s after it's clear. The AI only rewrites that flag on path/park/dispatch events, so the two don't fight.
+4. **Ambulances light up to get through traffic.** A transport without sirens (vanilla only lights a critical patient) temporarily gets `CarFlags.Emergency` while traffic holds it, and loses it ~5s after it's clear. This simulates what happens here in the UK where an otherwise silent emergency vehicle can just blip their siren at a junction to let them progress through. The AI only rewrites that flag on path/park/dispatch events, so the two don't fight.
 5. **Keep the junctions ahead clear.** `LaneReservation.m_Next.m_Priority = 108` along the nav buffer with a distance budget (default 60 m) — the same reservations `ReserveNavigationLanes` already writes, just further than braking distance. `CarLaneSpeedIterator.CheckOverlappingLanes` then stops civilians short of any crossing lane and `CreatureTargetIterator` holds pedestrians at the kerb. Works at unsignalled junctions and roundabouts, and composes with the green wave at lights.
 6. **Stall handling.** A responder making no progress while still en route: 5 s → the mod backs off (alternating); 30 s → gives up on it (fresh path; green wave and reservations released for it, so the street outside a blocked car park doesn't jam); `StuckDespawnSeconds` (default 120, 0 = never) → deleted, as the vanilla AI does with a stuck responder, so the call gets a fresh unit.
 
@@ -30,12 +30,12 @@ Two new systems, `EmergencyGhostSystem` (Burst job) and `JunctionClearSystem` (m
 
 ## Tested
 
-Several hours in a ~60k city, LHT (UK). Traffic lights and roundabouts clear ahead of responders, pedestrians hold, responders creep/scoot through queues, transports light up. Two deadlocks were found through the `[SelfTest]` counters in the log and fixed (an angled responder whose nav wanted to reverse; a car-park stall holding the street outside). Not stress-tested at scale: the free-lane pass, and how often the 30 s / 120 s stages fire. The `[SelfTest] ghost status` line breaks every skipped responder down by reason, which is the first thing to read if something looks wrong.
+A few hours in a ~20k city, LHT (UK). Traffic lights and roundabouts clear ahead of responders, pedestrians hold, responders creep/scoot through queues, transports light up. Two deadlocks were found through the `[SelfTest]` counters in the log and fixed (an angled responder whose nav wanted to reverse; a car-park stall holding the street outside). Not stress-tested at scale: the free-lane pass, and how often the 30 s / 120 s stages fire. The `[SelfTest] ghost status` line breaks every skipped responder down by reason, which is the first thing to read if something looks wrong.
 
 ## Things you may want to tune
 
-Constants at the top of `EmergencyGhostSystem.cs`: pull-over trigger distance (15 m) and slow-traffic threshold (8 m/s); free-lane pass needs 30 m clear and 60 m of lane, returns at 30 m; lights on below 3 m/s, off above 6 m/s after 5 s; stall thresholds 0.5 m / 5 s / 30 s. Defaults in `Setting.cs`.
+Constants at the top of `EmergencyGhostSystem.cs`: pull-over trigger distance (15m) and slow-traffic threshold (8 m/s); free-lane pass needs 30 m clear and 60 m of lane, returns at 30 m; lights on below 3 m/s, off above 6 m/s after 5 s; stall thresholds 0.5 m / 5 s / 30 s. Defaults in `Setting.cs`.
 
 Happy to split this into smaller PRs if you'd rather review it that way.
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+🤖 Generated with [Claude Code](https://claude.com/claude-code) : Tweaked by me :)
