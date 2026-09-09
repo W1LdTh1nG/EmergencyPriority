@@ -105,8 +105,10 @@ namespace EmergencyPriority
                 }
                 // A responder the ghost watchdog has stalled or given up on is not coming: stop holding the road
                 // for it. (Seen in play: an ambulance wedged in a car park, its driveway reserved, and every
-                // pedestrian on the pavement queued at that crossing in both directions.)
-                if (EmergencyGhostSystem.GivenUp.Contains(e))
+                // pedestrian on the pavement queued at that crossing in both directions.) Nor is one the game has
+                // put into its Stopped state (Moving removed, e.g. AmbulanceAISystem.StopVehicle): the ghost job's
+                // query cannot even see those, so the watchdog never gets to give up on them.
+                if (EmergencyGhostSystem.GivenUp.Contains(e) || EntityManager.HasComponent<Game.Objects.Stopped>(e))
                     continue;
 
                 CarCurrentLane current = EntityManager.GetComponentData<CarCurrentLane>(e);
