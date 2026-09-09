@@ -10,6 +10,7 @@ using Game.Vehicles;
 using Unity.Burst;
 using Unity.Burst.Intrinsics;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Entities;
 using Unity.Mathematics;
 using CarLaneFlags = Game.Vehicles.CarLaneFlags;
@@ -268,6 +269,10 @@ namespace EmergencyPriority
             [ReadOnly] public BufferLookup<LaneObject> m_LaneObjects;
             [ReadOnly] public BufferLookup<Game.Net.SubLane> m_SubLanes;
             [ReadOnly] public ComponentLookup<Game.Vehicles.Ambulance> m_AmbulanceData;
+            // Read-only views of two types this job also holds read-write chunk handles for (the responder is in
+            // another chunk/bucket than the civilian asking about it). Single-threaded schedule, so no race.
+            [ReadOnly, NativeDisableContainerSafetyRestriction] public ComponentLookup<CarCurrentLane> m_CurrentLaneData;
+            [ReadOnly, NativeDisableContainerSafetyRestriction] public BufferLookup<CarNavigationLane> m_NavigationLaneData;
 
             public NativeParallelHashMap<Entity, PassState> m_Passes;
             public NativeParallelHashMap<Entity, LitState> m_Lit;
@@ -774,8 +779,19 @@ namespace EmergencyPriority
                         || (other.m_Flags & CarFlags.Emergency) == 0)
                         continue;
                     float span = forward ? myX - laneObject.m_CurvePosition.x : laneObject.m_CurvePosition.x - myX;
-                    if (span > 0f && span <= maxSpan && !IsHandsOff(laneObject.m_LaneObject))
-                        return true;
+                    if (span <= 0f || span > maxSpan || IsHandsOff(laneObject.m_LaneObject))
+                        continue;
+                    // Only for a responder that is still going somewhere. CarFlags.Emergency is NOT cleared on
+                    // arrival: an ambulance loading its patient at the kerb, or a fire engine at a blaze, keeps it
+                    // for the duration — and must not hold everything ahead of it stopped meanwhile. Same guard as
+                    // the push logic (kNotDrivingFlags + non-empty nav buffer). Seen in play: a bus and a bike
+                    // parked in front of a loading ambulance for as long as it stood there.
+                    if (!m_NavigationLaneData.TryGetBuffer(laneObject.m_LaneObject, out DynamicBuffer<CarNavigationLane> responderLanes)
+                        || responderLanes.Length == 0
+                        || !m_CurrentLaneData.TryGetComponent(laneObject.m_LaneObject, out CarCurrentLane responderLane)
+                        || (responderLane.m_LaneFlags & kNotDrivingFlags) != 0)
+                        continue;
+                    return true;
                 }
                 return false;
             }
@@ -901,6 +917,8 @@ namespace EmergencyPriority
                 m_LaneObjects = GetBufferLookup<LaneObject>(isReadOnly: true),
                 m_SubLanes = GetBufferLookup<Game.Net.SubLane>(isReadOnly: true),
                 m_AmbulanceData = GetComponentLookup<Game.Vehicles.Ambulance>(isReadOnly: true),
+                m_CurrentLaneData = GetComponentLookup<CarCurrentLane>(isReadOnly: true),
+                m_NavigationLaneData = GetBufferLookup<CarNavigationLane>(isReadOnly: true),
                 m_Passes = m_Passes,
                 m_Lit = m_Lit,
                 m_Stalls = m_Stalls,
