@@ -214,7 +214,8 @@ namespace EmergencyPriority
         private const int kForcedForward = 16;  // nav wanted to reverse behind a stopped car; pushed forward instead
         private const int kGaveUp = 17;         // 30 s without progress: hands off, repath, released from the walks
         private const int kDespawned = 18;      // StuckDespawnSeconds without progress: deleted like vanilla would
-        private const int kStatCount = 19;
+        private const int kPushedSpaceRule = 19; // pushed through the don't-block-the-box rule (no blocker entity)
+        private const int kStatCount = 20;
 
         // An ambulance we lit up, keyed by entity: when it was last held up by traffic.
         public struct LitState
@@ -486,37 +487,50 @@ namespace EmergencyPriority
                         continue;
                     }
 
-                    // Boxed in by a vehicle ahead, and that vehicle is a car. Blocker is what the nav job just
-                    // computed this frame for this vehicle, so it is current.
+                    // Blocker is what the nav job just computed this frame for this vehicle, so it is current.
+                    bool crossing = blocker.m_Type == BlockerType.Crossing;
+                    bool spaceRule = false;
                     if (blocker.m_Blocker == Entity.Null)
                     {
-                        m_Stats[kSkipNoBlocker]++;
-                        continue;
+                        // No entity: a rule, not a vehicle. "Continuing" with no entity is the don't-block-the-box
+                        // check (CarLaneSpeedIterator.IterateNextLane -> CheckSpace, :404-457): don't enter the
+                        // next lane unless there is room beyond it. In a car park's short lanes that can fail for
+                        // ever with nothing actually in the way, and a responder is the vehicle the box should
+                        // clear FOR — so push through it. Anything else with no entity (a reservation yield, a
+                        // physical barrier, a speed limit) is left alone.
+                        if (blocker.m_Type != BlockerType.Continuing)
+                        {
+                            m_Stats[kSkipNoBlocker]++;
+                            continue;
+                        }
+                        spaceRule = true;
                     }
-                    bool crossing = blocker.m_Type == BlockerType.Crossing;
-                    if (blocker.m_Type != BlockerType.Continuing && !crossing)
+                    else
                     {
-                        m_Stats[blocker.m_Type == BlockerType.Oncoming ? kSkipOncoming : kSkipOtherType]++;
-                        continue;
-                    }
-                    // A trailer (truck, articulated bus) is its own lane object with no Car component; the vehicle
-                    // that owns it is in Controller.m_Controller — same resolution the nav job does (:1387).
-                    Entity blockerVehicle = blocker.m_Blocker;
-                    if (m_ControllerData.TryGetComponent(blockerVehicle, out Controller controller))
-                        blockerVehicle = controller.m_Controller;
-                    if (!m_CarData.HasComponent(blockerVehicle))
-                    {
-                        m_Stats[kSkipNotCar]++;
-                        continue;
-                    }
-                    // Cross traffic only when it is stopped. A car with no Moving component is parked/stopped; one
-                    // with it must be at a standstill. Same-lane blockers need no such test: the max() below already
-                    // leaves a faster car ahead alone, because the nav speed is then above the ghost speed.
-                    if (crossing && m_MovingData.TryGetComponent(blockerVehicle, out Moving blockerMoving)
-                        && math.lengthsq(blockerMoving.m_Velocity) > kStationarySpeed * kStationarySpeed)
-                    {
-                        m_Stats[kSkipCrossing]++;
-                        continue;
+                        if (blocker.m_Type != BlockerType.Continuing && !crossing)
+                        {
+                            m_Stats[blocker.m_Type == BlockerType.Oncoming ? kSkipOncoming : kSkipOtherType]++;
+                            continue;
+                        }
+                        // A trailer (truck, articulated bus) is its own lane object with no Car component; the
+                        // vehicle that owns it is in Controller.m_Controller — same resolution the nav job does.
+                        Entity blockerVehicle = blocker.m_Blocker;
+                        if (m_ControllerData.TryGetComponent(blockerVehicle, out Controller controller))
+                            blockerVehicle = controller.m_Controller;
+                        if (!m_CarData.HasComponent(blockerVehicle))
+                        {
+                            m_Stats[kSkipNotCar]++;
+                            continue;
+                        }
+                        // Cross traffic only when it is stopped. A car with no Moving component is parked/stopped;
+                        // one with it must be at a standstill. Same-lane blockers need no such test: the max() below
+                        // already leaves a faster car ahead alone, because the nav speed is then above ghost speed.
+                        if (crossing && m_MovingData.TryGetComponent(blockerVehicle, out Moving blockerMoving)
+                            && math.lengthsq(blockerMoving.m_Velocity) > kStationarySpeed * kStationarySpeed)
+                        {
+                            m_Stats[kSkipCrossing]++;
+                            continue;
+                        }
                     }
 
                     // Nav wanted to back up to realign, but there is a stopped car in front and it is a responder:
@@ -562,7 +576,7 @@ namespace EmergencyPriority
                     blocker.m_MaxSpeed = (byte)math.max(kBlockerNotBlocked,
                         math.clamp((int)math.round(target * kBlockerSpeedScale), 0, 255));
                     blockers[i] = blocker;
-                    m_Stats[crossing ? kPushedCrossing : kPushed]++;
+                    m_Stats[spaceRule ? kPushedSpaceRule : crossing ? kPushedCrossing : kPushed]++;
                 }
             }
 
@@ -1060,7 +1074,7 @@ namespace EmergencyPriority
                 m_LastLog = frame;
                 Dependency.Complete();
                 Mod.log.Info($"[SelfTest] ghost status: enabled={s.Enabled} ghost={s.GhostThroughJams} pullOver={s.TrafficPullsOver} freeLane={s.GhostUsesFreeLane} lights={s.LightsInTraffic} speed={job.m_GhostSpeed:0.0}m/s"
-                    + $" pushed={m_Stats[kPushed]} pushedCrossing={m_Stats[kPushedCrossing]} retargeted={m_Stats[kRetargeted]} pulledOver={m_Stats[kPulledOver]}"
+                    + $" pushed={m_Stats[kPushed]} pushedCrossing={m_Stats[kPushedCrossing]} pushedSpaceRule={m_Stats[kPushedSpaceRule]} retargeted={m_Stats[kRetargeted]} pulledOver={m_Stats[kPulledOver]}"
                     + $" passes={m_Stats[kPassStarted]} returns={m_Stats[kPassReturned]} passesLive={m_Passes.Count()}"
                     + $" litUp={m_Stats[kLitUp]} litOff={m_Stats[kLitOff]} litLive={m_Lit.Count()}"
                     + $" stalls={m_Stats[kStalls]} forcedForward={m_Stats[kForcedForward]} gaveUp={m_Stats[kGaveUp]} despawned={m_Stats[kDespawned]} givenUpLive={GivenUp.Count}"
