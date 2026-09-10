@@ -43,9 +43,6 @@ namespace EmergencyPriority
             // 4 in the system keeps a reservation live whichever UpdateFrame bucket a lane is in.
             updateSystem.UpdateBefore<JunctionClearSystem, NetLaneReservationSystem>(SystemUpdatePhase.GameSimulation);
 
-            // LOCAL BUILD ONLY: file-based command bridge for live diagnostics (see DebugBridgeSystem.cs).
-            updateSystem.UpdateAt<DebugBridgeSystem>(SystemUpdatePhase.GameSimulation);
-
             log.Info("[SelfTest] EmergencyPriority loaded (despawn guard + auto re-route + green-light priority + ghost-through-jams + junction clearing).");
         }
 
