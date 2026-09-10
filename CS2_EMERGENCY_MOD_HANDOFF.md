@@ -197,3 +197,42 @@ two non-ambulance responders parked at their incident with EndOfPath. First bori
 **Lessons:** the two diagnostics ([Stall], [Sitting]) paid for themselves within an hour — keep them in the
 upstream branch. Every deploy needs the game closed; the log resets on each load, so read it before restarting.
 Entity ids are reassigned on load, so a vehicle can't be tracked across restarts by id — use position.
+
+---
+
+## 10. 2026-09-10 session: refactor, the circling ambulance, the bridge that came and went
+
+Heads: `ghost` = `045de41` (17 commits on upstream `main`, all in the open PR), `local-ghost` = `fa2333e`.
+
+**Refactor (`ac9f146`).** `EmergencyGhostSystem.cs` (1,142 lines, a 255-line `Execute` doing five things) split into
+seven partial-class files, no behaviour change: `.cs` core (job handles, `Execute` as a sequence of named calls,
+lifecycle, sweep), `.Ghost.cs` (push + re-target), `.PullOver.cs`, `.Pass.cs`, `.Lights.cs`, `.Watchdog.cs`
+(+ `GivenUp`), `.Diagnostics.cs` ([Stall]/[Sitting]/[SelfTest]). Verified by diffing the set of code lines before
+and after (only extracted signatures, dispatch calls, renamed parameters) and a clean compile.
+
+**Circling ambulance (`91fdea5`).** An ambulance drove round and round in the carriageway, blocking everything.
+Cause: my earlier "force forward when nav asks to reverse" fix — right when the target is ahead, wrong when it
+is beside/behind (the turning circle can never reach it). And because it was moving, the position-based
+watchdog never tripped. Fixes: (a) target more than ~80° off heading → grant nav's own reverse at 2 m/s
+(`kForwardMinHeading`, `kReverseSpeed`, counter `reversed`); (b) watchdog progress is now "3 m further along
+the lane, or a new lane" (`StallState.m_LastLane/m_LastCurveX`) instead of "3 m through space", so circling and
+car-park jiggling count as stalled. Confirmed in play: the ambulance did a three-point turn and left; the log
+showed one stage-1 trip on a vehicle doing 6 m/s with no lane progress, then nothing.
+
+**Debug bridge — built, used, removed.** A file-based command bridge (`DebugBridgeSystem`, local-ghost only:
+`command.txt` → `bridge.log`, commands responders/vehicle/near/watch/lane/settings) was added to interrogate the
+running game, then removed the same evening at John's request: he wants a **standalone, generic MCP bridge mod**
+instead. Notes for that live in `D:\VS\Projects\Personal\git\CS2Mods\MCP_Bridge\NOTES.md`. What stayed on
+`ghost`: `EmergencyGhostSystem.DescribeInternal(entity, frame)` (`045de41`), a text dump of the job's private
+per-vehicle state (stall/hands-off/give-up, pass, lights) for any external tool.
+
+**Safe compile check on `ghost`:** `dotnet build -c Debug -p:LocalModsPath=<scratch dir>` — `Mod.targets` sets
+`DeployDir = LocalModsPath\TargetName`, so the build deploys to the scratch folder instead of the game. Used
+before every commit tonight; the game's Mods folder only ever saw `local-ghost` builds.
+
+**Log reading after the fixes (22:02–22:07 load):** two stall reports at one junction — the circling transport
+(caught within 5 s by the new progress test, one trip, gone) and a dispatched ambulance queued behind it
+(reservation yield, two alternating trips, gone). No warnings. `reversed` counter arrives with the next status line.
+
+**Open:** nothing known broken. Constants still hard-coded as listed in §8 plus `kForwardMinHeading` 0.17 and
+`kReverseSpeed` 2 m/s. PR awaiting AmicusDeus.
