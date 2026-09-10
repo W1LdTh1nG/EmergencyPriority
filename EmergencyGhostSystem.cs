@@ -90,7 +90,8 @@ namespace EmergencyPriority
         private const int kGaveUp = 17;         // 30 s without progress: hands off, repath, released from the walks
         private const int kDespawned = 18;      // StuckDespawnSeconds without progress: deleted like vanilla would
         private const int kPushedSpaceRule = 19; // pushed through the don't-block-the-box rule (no blocker entity)
-        private const int kStatCount = 20;
+        private const int kReversed = 20;       // nav wanted to reverse and the target was behind: reverse granted
+        private const int kStatCount = 21;
 
         [BurstCompile]
         private partial struct GhostJob : IJobChunk

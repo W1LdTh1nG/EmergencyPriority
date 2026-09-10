@@ -131,7 +131,7 @@ namespace EmergencyPriority
                 + $" pushed={m_Stats[kPushed]} pushedCrossing={m_Stats[kPushedCrossing]} pushedSpaceRule={m_Stats[kPushedSpaceRule]} retargeted={m_Stats[kRetargeted]} pulledOver={m_Stats[kPulledOver]}"
                 + $" passes={m_Stats[kPassStarted]} returns={m_Stats[kPassReturned]} passesLive={m_Passes.Count()}"
                 + $" litUp={m_Stats[kLitUp]} litOff={m_Stats[kLitOff]} litLive={m_Lit.Count()}"
-                + $" stalls={m_Stats[kStalls]} forcedForward={m_Stats[kForcedForward]} gaveUp={m_Stats[kGaveUp]} despawned={m_Stats[kDespawned]} givenUpLive={GivenUp.Count}"
+                + $" stalls={m_Stats[kStalls]} forcedForward={m_Stats[kForcedForward]} reversed={m_Stats[kReversed]} gaveUp={m_Stats[kGaveUp]} despawned={m_Stats[kDespawned]} givenUpLive={GivenUp.Count}"
                 + $" skipped: noBlocker={m_Stats[kSkipNoBlocker]} crossingMoving={m_Stats[kSkipCrossing]}"
                 + $" oncoming={m_Stats[kSkipOncoming]} otherType={m_Stats[kSkipOtherType]} notCar={m_Stats[kSkipNotCar]}"
                 + $" notDriving={m_Stats[kSkipNotDriving]} reversing={m_Stats[kSkipReversing]}");
