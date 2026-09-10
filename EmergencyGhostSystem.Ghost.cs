@@ -63,6 +63,13 @@ namespace EmergencyPriority
         // angled ambulance sitting behind a pulled-over truck with `reversing` ticking up in the log.
         private const float kRetargetMinHeading = 0.82f;
 
+        // When nav wants to reverse: a target this far off heading or worse (cos 80° ≈ 0.17 — beside or behind) is
+        // one the vehicle's turning circle can never reach going forward; forcing it forward makes it drive round
+        // and round in the road (seen in play). Then nav's own manoeuvre is the right one: back up, at this speed,
+        // until the target is ahead again. A target within 80° of heading is forced forward as before.
+        private const float kForwardMinHeading = 0.17f;
+        private const float kReverseSpeed = 2f;
+
         private partial struct GhostJob
         {
             // The push for one responder. Writes navigations/lanes/blockers[i] when it raises the speed.
@@ -128,11 +135,24 @@ namespace EmergencyPriority
                     }
                 }
 
-                // Nav wanted to back up to realign, but there is a stopped car in front and it is a responder:
-                // go forward through it instead. (A reversing responder with a MOVING blocker was skipped above
-                // via the crossing test or is about to be left alone by the ghost-speed test.)
+                float3 position = transform.m_Position;
+                float3 heading = math.forward(transform.m_Rotation);
+
+                // Nav wanted to back up to realign, but its speed budget was 0 because of the stopped thing ahead.
+                // Target still roughly ahead: go forward through it instead, turning converges. Target beside or
+                // behind: let it reverse, with a budget — that is nav's own recovery and the only one that works.
                 if (wantsReverse)
                 {
+                    if (math.dot(heading, math.normalizesafe(navigation.m_TargetPosition - position)) < kForwardMinHeading)
+                    {
+                        navigation.m_MaxSpeed = -kReverseSpeed;
+                        navigations[i] = navigation;
+                        blocker.m_MaxSpeed = (byte)math.max(kBlockerNotBlocked,
+                            math.clamp((int)math.round(kReverseSpeed * kBlockerSpeedScale), 0, 255));
+                        blockers[i] = blocker;
+                        m_Stats[kReversed]++;
+                        return;
+                    }
                     navigation.m_MaxSpeed = 0f;
                     m_Stats[kForcedForward]++;
                 }
@@ -145,13 +165,11 @@ namespace EmergencyPriority
                 // The nav target is ~1 m ahead for a blocked car. Push it out to what `desired` needs, along the
                 // current lane only (never across a lane change or past the lane end), then apply vanilla's own
                 // no-overshoot clamp against wherever the target ended up.
-                float3 position = transform.m_Position;
                 float distance = math.distance(position, navigation.m_TargetPosition);
                 float need = desired * kTimeStep + kTargetMargin;
                 bool retargeted = false;
                 if (distance < need && lane.m_ChangeLane == Entity.Null)
-                    retargeted = AdvanceTarget(ref navigation, ref lane, prefabRef, position,
-                        math.forward(transform.m_Rotation), need, ref distance);
+                    retargeted = AdvanceTarget(ref navigation, ref lane, prefabRef, position, heading, need, ref distance);
 
                 float target = math.min(desired, distance / kTimeStep);
                 if (target <= navigation.m_MaxSpeed)

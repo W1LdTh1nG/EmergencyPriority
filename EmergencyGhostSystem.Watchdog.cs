@@ -1,3 +1,4 @@
+using Game.Net;
 using Game.Pathfind;
 using Game.Vehicles;
 using Unity.Collections;
@@ -23,8 +24,9 @@ namespace EmergencyPriority
     //     unit instead of sitting behind a vehicle that will never arrive. Lights are left alone throughout.
     public partial class EmergencyGhostSystem
     {
-        // "Progress" = getting kStallMove away from where it last made progress. 3 m, not 0.5: a vehicle threading
-        // a car park can jiggle half a metre back and forth for ever without going anywhere.
+        // "Progress" = advancing kStallMove along the lane it is on, or moving to another lane. Measured along the
+        // road rather than through space on purpose: a vehicle driving round in a circle in the carriageway, or
+        // jiggling between the bays of a car park, covers plenty of ground and gets nowhere (both seen in play).
         private const float kStallMove = 3f;
 
         // The main-thread walks (green wave, junction clearing) stop holding lights and lanes for a responder that
@@ -41,7 +43,8 @@ namespace EmergencyPriority
         // stage 1 last tripped (so it alternates instead of latching), and whether stage 2 has fired for this stall.
         public struct StallState
         {
-            public float3 m_LastPosition;
+            public Entity m_LastLane;
+            public float m_LastCurveX;
             public uint m_LastMoveFrame;
             public uint m_HandsOffUntil;
             public uint m_LastTrip;
@@ -83,11 +86,14 @@ namespace EmergencyPriority
                     return 0;
                 }
                 if (!m_Stalls.TryGetValue(entity, out StallState stall))
-                    stall = new StallState { m_LastPosition = position, m_LastMoveFrame = m_Frame };
-                if (math.distancesq(position, stall.m_LastPosition) > kStallMove * kStallMove)
+                    stall = new StallState { m_LastLane = lane.m_Lane, m_LastCurveX = lane.m_CurvePosition.x, m_LastMoveFrame = m_Frame };
+                float laneLength = m_CurveData.TryGetComponent(lane.m_Lane, out Curve curve) ? curve.m_Length : 0f;
+                if (lane.m_Lane != stall.m_LastLane
+                    || math.abs(lane.m_CurvePosition.x - stall.m_LastCurveX) * laneLength >= kStallMove)
                 {
                     // Progress: everything is forgiven. (A give-up's hands-off still runs its course.)
-                    stall.m_LastPosition = position;
+                    stall.m_LastLane = lane.m_Lane;
+                    stall.m_LastCurveX = lane.m_CurvePosition.x;
                     stall.m_LastMoveFrame = m_Frame;
                     stall.m_GaveUp = false;
                 }
