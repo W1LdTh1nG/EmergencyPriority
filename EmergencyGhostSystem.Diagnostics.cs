@@ -120,6 +120,23 @@ namespace EmergencyPriority
             sitting.Dispose();
         }
 
+        // Main thread, on demand: the job's private state for one vehicle, for external diagnostics.
+        public string DescribeInternal(Entity e, uint frame)
+        {
+            Dependency.Complete();
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            if (m_Stalls.TryGetValue(e, out StallState st))
+                sb.Append($" stall[lane={st.m_LastLane.Index} sinceProgress={frame - st.m_LastMoveFrame}f handsOff={(st.m_HandsOffUntil > frame ? (st.m_HandsOffUntil - frame) + "f" : "no")} gaveUp={st.m_GaveUp}]");
+            else
+                sb.Append(" stall[none]");
+            if (m_Passes.TryGetValue(e, out PassState p))
+                sb.Append($" pass[home={p.m_HomeLane.Index} via={p.m_PassLane.Index} edge={p.m_Edge.Index} returning={p.m_Returning}]");
+            if (m_Lit.TryGetValue(e, out LitState l))
+                sb.Append($" lit[lastHeldUp={frame - l.m_LastBlockedFrame}f ago]");
+            sb.Append($" givenUp={GivenUp.Contains(e)}");
+            return sb.ToString();
+        }
+
         // Main thread, every ~4.5 min. Completes the job to read the counters.
         private void LogStatus(uint frame, EmergencyPrioritySetting s, float ghostSpeed)
         {
