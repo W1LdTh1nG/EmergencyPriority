@@ -236,3 +236,92 @@ before every commit tonight; the game's Mods folder only ever saw `local-ghost` 
 
 **Open:** nothing known broken. Constants still hard-coded as listed in §8 plus `kForwardMinHeading` 0.17 and
 `kReverseSpeed` 2 m/s. PR awaiting AmicusDeus.
+
+## Live game access (cs2-bridge MCP server)
+
+A running Cities: Skylines II with the CS2MCPBridge mod (Debug build, "Enable bridge socket" on) exposes the
+live ECS world as MCP tools named `mcp__cs2-bridge__*`. Reading the real state beats guessing from screenshots
+and log counters. Prefer it whenever a question is about what an entity is doing right now.
+
+**Start with `ping`.** If it cannot connect, the game is not running or the setting is off: say so and ask,
+do not fall back to guessing silently.
+
+**Tools and what they are for**
+
+- `types(pattern)` finds exact component type names. Short names like `Car` work in the other tools when
+  unambiguous; the error message lists candidates when they are not.
+- `query(all, any, none, with_values, limit, offset)` finds entities by component type, with a total count and
+  optional component values per result. Deleted and Temp entities are excluded unless asked for. Filter on
+  field values client-side (for example, `Car.m_Flags` containing `Emergency` picks responders).
+- `entity(index, version)` dumps everything on one entity: components with field values (names match the
+  decompiled source, `m_` prefixes kept), tags, buffers, shared/managed components, prefab name.
+- `near(x, z, radius, ...)` finds what is around a map position; omit x and z to search around the camera.
+- `watch(index, version, components, seconds)` follows one entity and returns a baseline plus one event per
+  16-frame tick whose watched components changed. It blocks for `seconds`. A paused city produces no ticks.
+- `selected()` returns what the user has clicked in the game and where the camera is. When the user says
+  "this one", call it.
+- `show(index, version, camera)` selects an entity in the game UI and follows it (`follow`), jumps the camera
+  to it (`goto`), or only selects (`none`). Use it to point the user at what you are describing.
+- `logs(name, tail, filter)` reads the game's log files on disk, for example `logs("EmergencyPriority",
+  filter="Stall|SelfTest")`. No game connection needed.
+
+**A workflow that found a real bug** (an ambulance circling in a carriageway): `query` Ambulance + Moving with
+Car values and keep the ones flagged Emergency; `entity` one to see what it carries; `watch` it with Transform,
+Moving, CarCurrentLane, CarNavigation and Blocker; derive speed from Moving, lane progress from
+CarCurrentLane.m_Lane and m_CurvePosition, and the heading-to-target angle from Transform.m_Rotation and
+CarNavigation.m_TargetPosition; `entity` the blocker to see what it was held behind. "Moving but no lane
+progress" and "target behind heading" were the two signals. `server/tools/ambulance_proof.py` in the bridge
+repo is that workflow as a script.
+
+**Rules**
+
+- Every result carries `frame`, `world` and `paused`. Compare frames to know whether two answers are from the
+  same simulation step.
+- Entity indices are reused after despawn and reassigned when a save is loaded. Keep the version with the
+  index, pass it back to assert identity, and re-resolve by index after a load.
+- The bridge is read-only. State a mod keeps in private native containers is invisible to it; if you need to
+  see such state, keep it in components or expose a describe hook.
+- `show` moves the user's camera. Prefer `camera="none"` or `"goto"` unless they asked to follow.
+
+### Debug workflow with the bridge (proven 2026-09-13)
+
+The bridge (`CS2MCPBridge` 0.2.0, game 1.6.0f1) replaces the file bridge and the guesswork. Standard loop for
+"a responder is doing something wrong":
+
+1. `ping` — confirm the game is up; note `frame`.
+2. **Find it.** From the mod log: `logs("EmergencyPriority", filter="Stall\]|Sitting\]")` gives `vehicle=index:version`
+   and a position. From the player: `selected()` when John says "this one". From scratch:
+   `query(all=["Game.Vehicles.Ambulance","Game.Objects.Moving"], with_values=["Game.Vehicles.Car","Game.Vehicles.Ambulance"])`
+   (or FireEngine / PoliceCar) and keep the ones whose `Car.m_Flags` contains `Emergency`. Ambulance
+   `m_State` decodes the job: Dispatched / Returning+Transporting(+Critical) / AtTarget.
+3. **Read it once.** `entity(index, version)` — the fields that matter: `Car.m_Flags`, `CarCurrentLane`
+   (`m_Lane`, `m_ChangeLane`, `m_CurvePosition` [target t, reservation end, lane exit], `m_LaneFlags`),
+   `CarNavigation` (`m_MaxSpeed` — sign bit = reversing, `m_TargetPosition`), `Blocker` (`m_Blocker`, `m_Type`,
+   `m_MaxSpeed` byte — ≥6 means we wrote it), `PathOwner.m_State`, buffer `CarNavigationLane` (route ahead;
+   empty = arrived or re-pathing), `Moving.m_Velocity`, `Transform`. Tags tell you `Stopped`/`ParkedCar`.
+4. **Watch it.** `watch(index, version, components=[Moving, CarCurrentLane, CarNavigation, Blocker], seconds=10)`.
+   One event per 16-frame tick with only the changed components. Read: speed from `Moving`; lane progress from
+   `m_Lane` changing or `m_CurvePosition.x` advancing; the ghost push from `navSpeed` sitting at the setting
+   (6.0) with the blocker byte ≥6; the arrival from a `ParkingSpace` lane and `m_TargetRotation` becoming
+   non-zero. "Moving but no lane progress" = circling; "navSpeed 0, reverse sign, blocker none/Continuing"
+   = the box-rule/reverse trap; "Crossing with blocker index 0" = waiting on a lane reservation.
+5. **Look around it.** `entity(blockerIndex)` for what it is held behind; `near(x, z, 40, all=["Game.Vehicles.Car"],
+   with_values=["Game.Vehicles.Car","Game.Objects.Moving"])` for the queue; a lane index from `CarCurrentLane`
+   can be dumped with `entity` too (CarLane flags, LaneReservation next/prev, LaneSignal).
+6. **Show John.** `show(index, version, camera="goto")` selects it and jumps the camera once; say so in the
+   reply. Use `"follow"` only when asked. Entities move on quickly — the position in the `show` result is the
+   current one.
+7. Ghost-job private state (stall clock, hands-off, give-up, pass, lights) is NOT in components; it is in the
+   `[Stall]`/`[Sitting]` log lines and via `EmergencyGhostSystem.DescribeInternal` if a tool calls it.
+
+First run of this loop: the vehicle from a `[Stall]` line was traced from a 6 m/s ghost push behind a stopped
+car, through the blocker clearing, a right turn, three hospital connector lanes, to a parking bay with the
+patient aboard — 38 ticks, every field consistent with the decompile. The stall had been a normal junction wait.
+
+## 11. Status — 2026-09-13
+
+Bridge in use (see above). Memory for AI sessions now lives under the `EmergencyVehicle` working directory
+(`.claude/projects/D--VS-Projects-Personal-git-CS2Mods-EmergencyVehicle/memory`); the two project memories were
+copied there. Heads unchanged: `ghost` = `045de41`, `local-ghost` = `51bc756` + this doc. Log after 30 min of
+play: 272 pushes, 62 pull-overs, 12 lights, 1 stall (junction wait), 11 reverse-grant ticks (≈ one three-point
+turn), 0 give-ups, 0 despawns. PR still awaiting AmicusDeus.
